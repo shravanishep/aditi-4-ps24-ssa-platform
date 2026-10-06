@@ -10,7 +10,7 @@ No orbital propagation, distance, or conjunction logic lives here.
 
 from __future__ import annotations
 
-from datetime import timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Annotated
 
@@ -27,6 +27,8 @@ from .schemas import (
     PropagatedOrbitStateResponse,
     SatelliteBasicInfo,
     SatelliteGPInfo,
+    TrajectoryPointResponse,
+    TrajectoryResponse,
 )
 
 router = APIRouter()
@@ -163,6 +165,101 @@ def get_orbit(
         velocity_z_km_s=state.velocity_z_km_s,
         sgp4_error=state.sgp4_error,
         error_message=state.error_message,
+    )
+
+
+def _parse_tz_timestamp(timestamp_str: str, field_name: str) -> datetime:
+    """Parse and validate an ISO-8601 timestamp string ensuring timezone awareness."""
+    try:
+        dt = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00").replace(" ", "+"))
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid {field_name} timestamp format: {exc}",
+        ) from exc
+
+    if dt.tzinfo is None:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"{field_name} must be timezone-aware "
+                "(e.g. 2026-09-20T10:00:00Z or 2026-09-20T15:30:00+05:30)."
+            ),
+        )
+    return dt
+
+
+@router.get(
+    "/satellites/{norad_id}/trajectory",
+    response_model=TrajectoryResponse,
+    tags=["satellites"],
+)
+def get_trajectory(
+    norad_id: int,
+    start: Annotated[
+        str,
+        Query(description="UTC or offset-aware ISO-8601 start timestamp."),
+    ],
+    end: Annotated[
+        str,
+        Query(description="UTC or offset-aware ISO-8601 end timestamp."),
+    ],
+    step_sec: Annotated[
+        float,
+        Query(ge=10.0, le=3600.0, description="Sampling step in seconds [10.0, 3600.0]."),
+    ] = 60.0,
+) -> TrajectoryResponse:
+    """Sample an orbital trajectory sequence in the TEME frame using SGP4 propagation."""
+    start_dt = _parse_tz_timestamp(start, "start")
+    end_dt = _parse_tz_timestamp(end, "end")
+
+    start_utc = start_dt.astimezone(timezone.utc)
+    end_utc = end_dt.astimezone(timezone.utc)
+
+    if end_utc <= start_utc:
+        raise HTTPException(
+            status_code=422,
+            detail="end time must be strictly greater than start time.",
+        )
+
+    window_sec = (end_utc - start_utc).total_seconds()
+    if window_sec > 86400.0:
+        raise HTTPException(
+            status_code=422,
+            detail="Trajectory time window cannot exceed 24 hours (86400 seconds).",
+        )
+
+    try:
+        row = get_satellite_by_norad(norad_id, _GP_CSV)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    points: list[TrajectoryPointResponse] = []
+    current_t = start_utc
+    step_delta = timedelta(seconds=step_sec)
+
+    while current_t <= end_utc:
+        state = propagate_orbit(row, current_t)
+        points.append(
+            TrajectoryPointResponse(
+                timestamp=state.timestamp,
+                position_x_km=state.position_x_km,
+                position_y_km=state.position_y_km,
+                position_z_km=state.position_z_km,
+                velocity_x_km_s=state.velocity_x_km_s,
+                velocity_y_km_s=state.velocity_y_km_s,
+                velocity_z_km_s=state.velocity_z_km_s,
+                sgp4_error=state.sgp4_error,
+            )
+        )
+        current_t += step_delta
+
+    return TrajectoryResponse(
+        norad_cat_id=int(row["NORAD_CAT_ID"]),
+        object_name=str(row.get("OBJECT_NAME", "")).strip(),
+        frame="TEME",
+        step_sec=step_sec,
+        points=points,
     )
 
 

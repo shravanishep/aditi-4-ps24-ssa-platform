@@ -4,6 +4,7 @@ const navItems = [
   { to: '/', label: 'Dashboard', icon: '▦' },
   { to: '/satellites', label: 'Satellite Explorer', icon: '◎' },
   { to: '/conjunction', label: 'Conjunction Analysis', icon: '⊕' },
+  { to: '/globe', label: '3D Globe', icon: '◉' },
 ]
 
 export default function Sidebar() {
@@ -40,7 +41,7 @@ export default function Sidebar() {
 
       {/* Footer */}
       <div className="px-4 py-3 border-t border-slate-700">
-        <p className="text-xs text-slate-600">Layer 5 · Dashboard</p>
+        <p className="text-xs text-slate-600">Layer 6 · Globe</p>
       </div>
     </nav>
   )

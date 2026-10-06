@@ -1,11 +1,12 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import cesium from 'vite-plugin-cesium'
 
 // The Vite dev server proxies all API routes to the FastAPI backend.
 // This avoids CORS issues during development without modifying the backend.
 // For production, set VITE_API_BASE_URL to the actual backend URL.
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), cesium()],
   server: {
     proxy: {
       '/health': { target: 'http://localhost:8000', changeOrigin: true },

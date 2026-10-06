@@ -104,3 +104,34 @@ class CloseApproachResultResponse(BaseModel):
     threshold_km: float
     is_candidate_close_approach: bool
     error_message: str
+
+
+class TrajectoryPointResponse(BaseModel):
+    """One SGP4-propagated state in a trajectory sequence.
+
+    Position in km (TEME frame), velocity in km/s.
+    """
+
+    timestamp: datetime
+    position_x_km: float
+    position_y_km: float
+    position_z_km: float
+    velocity_x_km_s: float
+    velocity_y_km_s: float
+    velocity_z_km_s: float
+    sgp4_error: int
+
+
+class TrajectoryResponse(BaseModel):
+    """Multi-point trajectory for one satellite.
+
+    Positions in km (TEME frame), velocities in km/s.
+    Points with sgp4_error != 0 are included so the caller
+    can decide how to handle partial failures.
+    """
+
+    norad_cat_id: int
+    object_name: str
+    frame: str  # always "TEME" — Cesium transform required before display
+    step_sec: float
+    points: list[TrajectoryPointResponse]

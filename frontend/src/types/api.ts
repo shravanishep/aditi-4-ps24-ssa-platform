@@ -69,3 +69,30 @@ export interface CloseApproachResultResponse {
   is_candidate_close_approach: boolean
   error_message: string
 }
+
+/** One SGP4-propagated state in a trajectory sequence.
+ *  Position in km (TEME frame), velocity in km/s.
+ *  Points where sgp4_error !== 0 indicate SGP4 failure at that step.
+ */
+export interface TrajectoryPointResponse {
+  timestamp: string // UTC ISO-8601
+  position_x_km: number
+  position_y_km: number
+  position_z_km: number
+  velocity_x_km_s: number
+  velocity_y_km_s: number
+  velocity_z_km_s: number
+  sgp4_error: number
+}
+
+/** Multi-point trajectory. frame is always "TEME".
+ *  The frontend must apply Cesium.Transforms.computeTemeToPseudoFixedMatrix()
+ *  before rendering positions on the globe.
+ */
+export interface TrajectoryResponse {
+  norad_cat_id: number
+  object_name: string
+  frame: string
+  step_sec: number
+  points: TrajectoryPointResponse[]
+}
