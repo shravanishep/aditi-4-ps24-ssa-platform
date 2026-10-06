@@ -28,5 +28,10 @@ Thumbs.db
 data/raw/*
 !data/raw/.gitkeep
 
+# Processed ML datasets (Parquet files can be large; regenerate from source)
+data/processed/*.parquet
+data/processed/*.json
+!data/processed/.gitkeep
+
 # Logs
 *.log
