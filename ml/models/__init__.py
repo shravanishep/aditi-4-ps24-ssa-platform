@@ -16,6 +16,7 @@ from ml.models.threat_prioritization import (
     ThreatEvent,
     identify_protected_targets,
     screen_threats,
+    screen_threats_from_catalog,
 )
 
 __all__ = [
@@ -27,4 +28,5 @@ __all__ = [
     "ScreeningResult",
     "identify_protected_targets",
     "screen_threats",
+    "screen_threats_from_catalog",
 ]

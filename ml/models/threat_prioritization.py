@@ -127,6 +127,11 @@ class ThreatEvent:
     # Metadata
     screening_notes: list[str] = field(default_factory=list)
 
+    # Layer 10 catalogue integration
+    protected_classification: str = "ACTIVE_SATELLITE"
+    threat_classification: str = "UNKNOWN"
+    threat_source_provenance: str = ""
+
 
 # ---------------------------------------------------------------------------
 # ScreeningResult — complete output of a threat-screening run
@@ -352,6 +357,30 @@ def screen_threats(
     """
     config.validate()
 
+    if gp_df.empty:
+        return ScreeningResult(
+            events=[],
+            protected_count=len(protected_ids),
+            candidates_screened=0,
+            pairs_evaluated=0,
+            events_within_threshold=0,
+            data_source_notes=["No orbital records available in dataset for screening."],
+            config_summary={
+                "screening_threshold_km": config.screening_threshold_km,
+                "screening_window_hours": config.screening_window_hours,
+                "max_threat_candidates": config.max_threat_candidates,
+                "weights": {
+                    "separation": config.weight_separation,
+                    "relative_velocity": config.weight_relative_velocity,
+                    "anomaly_score": config.weight_anomaly_score,
+                    "time_to_tca": config.weight_time_to_tca,
+                },
+                "anomaly_model_available": detector is not None,
+                "threat_data_source": "empty",
+                "disclaimer": config.disclaimer,
+            },
+        )
+
     if reference_time is None:
         epochs = [
             parse_epoch(row["EPOCH"])
@@ -433,12 +462,29 @@ def screen_threats(
                 threat_id, feature_df, detector,
             )
 
+            threat_name = str(threat_row.get("OBJECT_NAME", "")).strip()
+
             # Build event notes
             event_notes: list[str] = []
             if anom_score is None:
                 event_notes.append(
                     "Anomaly score unavailable for this object; "
                     "anomaly factor contributes zero to risk score."
+                )
+            # Visible stale warnings
+            if bool(threat_row.get("IS_STALE")):
+                t_age = threat_row.get("EPOCH_AGE_DAYS")
+                t_age_str = f"{t_age:.1f} days" if t_age is not None else "unknown age"
+                event_notes.append(
+                    f"STALE ORBITAL DATA: Threat object {threat_name} (NORAD {threat_id}) "
+                    f"epoch is {t_age_str} old. Prediction reliability degraded."
+                )
+            if bool(prot_row.get("IS_STALE")):
+                p_age = prot_row.get("EPOCH_AGE_DAYS")
+                p_age_str = f"{p_age:.1f} days" if p_age is not None else "unknown age"
+                event_notes.append(
+                    f"STALE ORBITAL DATA: Protected object {prot_name} (NORAD {prot_id}) "
+                    f"epoch is {p_age_str} old. Prediction reliability degraded."
                 )
 
             # Compute risk score
@@ -458,6 +504,10 @@ def screen_threats(
                 config=config,
             )
 
+            prot_class = str(prot_row.get("CLASSIFICATION", "ACTIVE_SATELLITE"))
+            threat_class = str(threat_row.get("CLASSIFICATION", "UNKNOWN"))
+            threat_prov = str(threat_row.get("SOURCE_PROVENANCE", ""))
+
             event = ThreatEvent(
                 protected_norad_id=prot_id,
                 protected_name=prot_name,
@@ -473,6 +523,9 @@ def screen_threats(
                 risk_severity=risk_sev,
                 risk_explanation=explanation,
                 screening_notes=event_notes,
+                protected_classification=prot_class,
+                threat_classification=threat_class,
+                threat_source_provenance=threat_prov,
             )
             events.append(event)
 
@@ -505,4 +558,61 @@ def screen_threats(
             ),
             "disclaimer": config.disclaimer,
         },
+    )
+
+
+def screen_threats_from_catalog(
+    catalog: Any,
+    config: ThreatConfig,
+    protected_ids: list[int] | None = None,
+    detector: Any | None = None,
+    feature_df: pd.DataFrame | None = None,
+    reference_time: datetime | None = None,
+) -> ScreeningResult:
+    """Convenience function to screen threats directly from a Layer 10 UnifiedCatalog.
+
+    Parameters
+    ----------
+    catalog:
+        UnifiedCatalog instance from ``backend.catalog``.
+    config:
+        Validated ``ThreatConfig``.
+    protected_ids:
+        Optional explicit list of protected NORAD IDs. If None, uses
+        ``config.protected_norad_ids`` or active satellites from the catalogue.
+    detector:
+        Optional fitted ``OrbitalAnomalyDetector``.
+    feature_df:
+        Optional Layer 7 features DataFrame.
+    reference_time:
+        Optional reference time for the screening window.
+
+    Returns
+    -------
+    ScreeningResult
+        Ranked threat events with preserved object classifications and provenance.
+    """
+    exclude_stale = (getattr(catalog, "stale_data_policy", "flag") == "exclude")
+    gp_df = catalog.to_gp_dataframe(only_with_orbital_data=True, exclude_stale=exclude_stale)
+
+    if protected_ids is None:
+        if config.protect_all_active:
+            protected_ids = identify_protected_targets(gp_df, config)
+        elif config.protected_norad_ids:
+            protected_ids = config.protected_norad_ids
+        else:
+            # Protected targets default to active satellites present in the catalogue
+            active_objs = catalog.get_active_satellites()
+            protected_ids = [o.norad_cat_id for o in active_objs if o.has_orbital_data]
+            if not protected_ids:
+                # Fallback to all objects with orbital data if no active classified
+                protected_ids = identify_protected_targets(gp_df, ThreatConfig(protect_all_active=True))
+
+    return screen_threats(
+        gp_df=gp_df,
+        protected_ids=protected_ids,
+        config=config,
+        detector=detector,
+        feature_df=feature_df,
+        reference_time=reference_time,
     )
