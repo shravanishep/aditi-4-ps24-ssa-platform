@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -135,3 +135,139 @@ class TrajectoryResponse(BaseModel):
     frame: str  # always "TEME" — Cesium transform required before display
     step_sec: float
     points: list[TrajectoryPointResponse]
+
+
+# ---------------------------------------------------------------------------
+# Layer 11 — Threat Prioritization Schemas
+# ---------------------------------------------------------------------------
+
+class ThreatScreeningRequest(BaseModel):
+    """Request parameters for threat screening and prioritization."""
+
+    protected_norad_ids: Optional[list[int]] = Field(
+        default=None,
+        description=(
+            "Optional explicit list of protected NORAD IDs to screen (max 50). "
+            "If omitted, the first max_protected_targets active satellites from the catalogue are screened."
+        ),
+    )
+    protect_all_active: bool = Field(
+        default=False,
+        description="If True, screen active satellites from the catalogue against candidate threats.",
+    )
+    max_protected_targets: int = Field(
+        default=5,
+        ge=1,
+        le=50,
+        description="Maximum number of protected satellites to evaluate when protected_norad_ids is omitted.",
+    )
+    screening_threshold_km: float = Field(
+        default=50.0,
+        gt=0.0,
+        le=1000.0,
+        description="Close approach distance threshold in km (0 < threshold <= 1000).",
+    )
+    screening_window_hours: float = Field(
+        default=48.0,
+        gt=0.0,
+        le=168.0,
+        description="Forward-looking propagation window in hours (0 < hours <= 168).",
+    )
+    max_threat_candidates: int = Field(
+        default=20,
+        ge=1,
+        le=200,
+        description="Maximum number of candidate threat objects to screen against each target.",
+    )
+    max_ranked_results: int = Field(
+        default=50,
+        ge=1,
+        le=200,
+        description="Maximum number of ranked threat events to return.",
+    )
+    coarse_step_sec: float = Field(
+        default=60.0,
+        ge=10.0,
+        le=3600.0,
+        description="Coarse conjunction search step in seconds [10.0, 3600.0].",
+    )
+    fine_step_sec: float = Field(
+        default=1.0,
+        ge=0.1,
+        le=60.0,
+        description="Fine conjunction search step in seconds [0.1, 60.0].",
+    )
+    max_epoch_age_days: Optional[float] = Field(
+        default=None,
+        gt=0.0,
+        description="Optional maximum epoch age in days for stale orbital data detection.",
+    )
+    stale_data_policy: str = Field(
+        default="flag",
+        description="Data freshness policy: 'flag' (include with visible warning) or 'exclude' (omit stale objects).",
+    )
+
+    @field_validator("stale_data_policy")
+    @classmethod
+    def validate_policy(cls, v: str) -> str:
+        """Validate stale data policy."""
+        if v not in ("flag", "exclude"):
+            raise ValueError("stale_data_policy must be either 'flag' or 'exclude'.")
+        return v
+
+    @field_validator("protected_norad_ids")
+    @classmethod
+    def validate_protected_ids(cls, v: Optional[list[int]]) -> Optional[list[int]]:
+        """Validate explicit protected NORAD IDs."""
+        if v is not None:
+            if len(v) > 50:
+                raise ValueError("Cannot screen more than 50 protected NORAD IDs in a single request.")
+            for nid in v:
+                if nid <= 0:
+                    raise ValueError(f"NORAD ID must be a positive integer, got {nid}.")
+        return v
+
+
+class ThreatEventResponse(BaseModel):
+    """Structured threat event returned by the threat prioritization API.
+
+    Distances in km, velocities in km/s, times in UTC.
+    The risk_score is a heuristic ranking metric, NOT a collision probability (Pc).
+    """
+
+    protected_norad_id: int
+    protected_name: str
+    protected_classification: str
+    threat_norad_id: int
+    threat_name: str
+    threat_classification: str
+    threat_source_provenance: str
+    time_of_closest_approach: datetime
+    minimum_separation_km: float
+    relative_speed_km_s: float
+    hours_to_tca: float
+    threat_anomaly_score: Optional[float] = None
+    threat_anomaly_severity: str = "unavailable"
+    risk_score: float
+    risk_severity: str
+    risk_explanation: dict[str, Any]
+    screening_notes: list[str]
+
+
+class ThreatScreeningSummary(BaseModel):
+    """Summary metadata and operational constraints for a threat screening run."""
+
+    protected_count: int
+    candidates_screened: int
+    pairs_evaluated: int
+    events_within_threshold: int
+    data_source_notes: list[str]
+    config_summary: dict[str, Any]
+    disclaimer: str
+
+
+class ThreatScreeningResponse(BaseModel):
+    """Structured response container for ranked threat screening events."""
+
+    events: list[ThreatEventResponse]
+    summary: ThreatScreeningSummary

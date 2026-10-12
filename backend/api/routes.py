@@ -17,9 +17,18 @@ from typing import Annotated
 import pandas as pd
 from fastapi import APIRouter, HTTPException, Query
 
+from backend.catalog import (
+    CatalogConfig,
+    GPSourceConfig,
+    ObjectClassification,
+    UnifiedCatalog,
+    build_unified_catalog,
+)
 from backend.orbital.conjunction import find_closest_approach
 from backend.orbital.gp_loader import get_satellite_by_norad, load_gp_data
 from backend.orbital.sgp4_propagator import propagate_orbit
+from ml.models.threat_config import ThreatConfig
+from ml.models.threat_prioritization import screen_threats_from_catalog
 
 from .schemas import (
     CloseApproachResultResponse,
@@ -27,6 +36,10 @@ from .schemas import (
     PropagatedOrbitStateResponse,
     SatelliteBasicInfo,
     SatelliteGPInfo,
+    ThreatEventResponse,
+    ThreatScreeningRequest,
+    ThreatScreeningResponse,
+    ThreatScreeningSummary,
     TrajectoryPointResponse,
     TrajectoryResponse,
 )
@@ -34,9 +47,74 @@ from .schemas import (
 router = APIRouter()
 
 # ---------------------------------------------------------------------------
-# Dataset path — resolved relative to the project root.
+# Dataset paths — resolved relative to the project root.
 # ---------------------------------------------------------------------------
-_GP_CSV = Path(__file__).resolve().parents[2] / "data" / "raw" / "active_satellites_gp.csv"
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_GP_CSV = _PROJECT_ROOT / "data" / "raw" / "active_satellites_gp.csv"
+_SATCAT_CSV = _PROJECT_ROOT / "data" / "raw" / "satcat.csv"
+
+_DEFAULT_CATALOG_CACHE: tuple[Path, float, UnifiedCatalog] | None = None
+
+
+def _get_or_build_catalog(
+    max_epoch_age_days: float | None = None,
+    stale_data_policy: str = "flag",
+) -> UnifiedCatalog:
+    """Retrieve cached default UnifiedCatalog or build configured catalogue."""
+    global _DEFAULT_CATALOG_CACHE
+
+    if not _GP_CSV.exists():
+        raise HTTPException(
+            status_code=503,
+            detail=f"Orbital dataset unavailable: {_GP_CSV.name} not found.",
+        )
+
+    # If non-default freshness filtering is requested, build a fresh catalogue
+    if max_epoch_age_days is not None or stale_data_policy != "flag":
+        cfg = CatalogConfig(
+            gp_sources=[
+                GPSourceConfig(
+                    source_name="active_satellites_gp",
+                    path=_GP_CSV,
+                    category_hint=ObjectClassification.ACTIVE_SATELLITE,
+                    enabled=True,
+                )
+            ],
+            satcat_path=_SATCAT_CSV if _SATCAT_CSV.exists() else None,
+            allow_remote_fetch=False,
+            max_epoch_age_days=max_epoch_age_days,
+            stale_data_policy=stale_data_policy,
+        )
+        return build_unified_catalog(cfg)
+
+    # Use cached default catalogue if active_satellites_gp.csv hasn't changed
+    try:
+        mtime = _GP_CSV.stat().st_mtime
+    except OSError:
+        mtime = 0.0
+
+    if _DEFAULT_CATALOG_CACHE is not None:
+        cached_path, cached_mtime, cached_cat = _DEFAULT_CATALOG_CACHE
+        if cached_path == _GP_CSV and cached_mtime == mtime:
+            return cached_cat
+
+    cfg = CatalogConfig(
+        gp_sources=[
+            GPSourceConfig(
+                source_name="active_satellites_gp",
+                path=_GP_CSV,
+                category_hint=ObjectClassification.ACTIVE_SATELLITE,
+                enabled=True,
+            )
+        ],
+        satcat_path=_SATCAT_CSV if _SATCAT_CSV.exists() else None,
+        allow_remote_fetch=False,
+        max_epoch_age_days=None,
+        stale_data_policy="flag",
+    )
+    cat = build_unified_catalog(cfg)
+    _DEFAULT_CATALOG_CACHE = (_GP_CSV, mtime, cat)
+    return cat
 
 
 def _gp_row_to_info(row: pd.Series) -> SatelliteGPInfo:
@@ -328,3 +406,245 @@ def analyze_conjunction(body: ConjunctionAnalysisRequest) -> CloseApproachResult
         is_candidate_close_approach=result.is_candidate_close_approach,
         error_message=result.error_message,
     )
+
+
+# ---------------------------------------------------------------------------
+# Threat Prioritization (Layer 11)
+# ---------------------------------------------------------------------------
+
+def _execute_threat_screening(
+    request: ThreatScreeningRequest,
+) -> ThreatScreeningResponse:
+    """Execute threat screening pipeline using UnifiedCatalog and Layer 9 engine."""
+    catalog = _get_or_build_catalog(
+        max_epoch_age_days=request.max_epoch_age_days,
+        stale_data_policy=request.stale_data_policy,
+    )
+
+    if len(catalog) == 0:
+        return ThreatScreeningResponse(
+            events=[],
+            summary=ThreatScreeningSummary(
+                protected_count=0,
+                candidates_screened=0,
+                pairs_evaluated=0,
+                events_within_threshold=0,
+                data_source_notes=["Catalogue contains 0 objects."],
+                config_summary={},
+                disclaimer="Catalogue contains no objects.",
+            ),
+        )
+
+    # Protected targets selection
+    if request.protected_norad_ids:
+        # Check against available objects with orbital data (pre-stale-filter)
+        catalog_orbital_ids = {o.norad_cat_id for o in catalog if o.has_orbital_data}
+        missing = [nid for nid in request.protected_norad_ids if nid not in catalog_orbital_ids]
+        if missing:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Protected NORAD IDs not found with orbital data in catalogue: {missing}",
+            )
+        # When stale_data_policy="exclude", a protected target whose epoch is stale
+        # will be absent from the gp_df that screen_threats operates on.
+        # Detect this and return a clear 404 rather than an internal IndexError.
+        if request.stale_data_policy == "exclude" and request.max_epoch_age_days is not None:
+            exclude_stale_ids = {
+                o.norad_cat_id for o in catalog
+                if o.has_orbital_data and not o.is_stale
+            }
+            excluded_protected = [
+                nid for nid in request.protected_norad_ids if nid not in exclude_stale_ids
+            ]
+            if excluded_protected:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"Protected NORAD IDs {excluded_protected} have stale orbital data "
+                        f"(epoch older than {request.max_epoch_age_days} days) and are excluded "
+                        f"by stale_data_policy='exclude'. Use stale_data_policy='flag' to include "
+                        f"them with a visible warning."
+                    ),
+                )
+        protected_ids = sorted(request.protected_norad_ids)
+    else:
+        # Default: sample active satellites from catalogue up to max_protected_targets
+        active_objs = catalog.get_active_satellites()
+        if request.stale_data_policy == "exclude":
+            active_objs = [o for o in active_objs if not o.is_stale]
+        protected_ids = [
+            o.norad_cat_id for o in active_objs if o.has_orbital_data
+        ][: request.max_protected_targets]
+        if not protected_ids:
+            # Fallback to any objects with orbital data (respecting stale exclusion)
+            fallback_objs = [
+                o for o in catalog
+                if o.has_orbital_data and (request.stale_data_policy != "exclude" or not o.is_stale)
+            ]
+            protected_ids = [
+                o.norad_cat_id for o in fallback_objs
+            ][: request.max_protected_targets]
+
+        if not protected_ids:
+            # No non-stale objects available to screen under exclude policy
+            return ThreatScreeningResponse(
+                events=[],
+                summary=ThreatScreeningSummary(
+                    protected_count=0,
+                    candidates_screened=0,
+                    pairs_evaluated=0,
+                    events_within_threshold=0,
+                    data_source_notes=[
+                        f"No non-stale objects remain with orbital data under stale_data_policy='exclude' "
+                        f"(max_epoch_age_days={request.max_epoch_age_days})."
+                    ],
+                    config_summary={
+                        "stale_data_policy": request.stale_data_policy,
+                        "max_epoch_age_days": request.max_epoch_age_days,
+                    },
+                    disclaimer=ThreatConfig().disclaimer,
+                ),
+            )
+
+    try:
+        threat_cfg = ThreatConfig(
+            gp_csv_path=str(_GP_CSV),
+            protected_norad_ids=protected_ids,
+            protect_all_active=request.protect_all_active,
+            screening_threshold_km=request.screening_threshold_km,
+            screening_window_hours=request.screening_window_hours,
+            coarse_step_sec=request.coarse_step_sec,
+            fine_step_sec=request.fine_step_sec,
+            max_threat_candidates=request.max_threat_candidates,
+            max_ranked_results=request.max_ranked_results,
+        )
+        threat_cfg.validate()
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    try:
+        result = screen_threats_from_catalog(
+            catalog=catalog,
+            config=threat_cfg,
+            protected_ids=protected_ids,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500, detail=f"Threat screening calculation error: {exc}"
+        ) from exc
+
+    events = [
+        ThreatEventResponse(
+            protected_norad_id=e.protected_norad_id,
+            protected_name=e.protected_name,
+            protected_classification=e.protected_classification,
+            threat_norad_id=e.threat_norad_id,
+            threat_name=e.threat_name,
+            threat_classification=e.threat_classification,
+            threat_source_provenance=e.threat_source_provenance,
+            time_of_closest_approach=e.time_of_closest_approach,
+            minimum_separation_km=e.minimum_separation_km,
+            relative_speed_km_s=e.relative_speed_km_s,
+            hours_to_tca=e.hours_to_tca,
+            threat_anomaly_score=e.threat_anomaly_score,
+            threat_anomaly_severity=e.threat_anomaly_severity,
+            risk_score=e.risk_score,
+            risk_severity=e.risk_severity,
+            risk_explanation=e.risk_explanation,
+            screening_notes=e.screening_notes,
+        )
+        for e in result.events
+    ]
+
+    summary = ThreatScreeningSummary(
+        protected_count=result.protected_count,
+        candidates_screened=result.candidates_screened,
+        pairs_evaluated=result.pairs_evaluated,
+        events_within_threshold=result.events_within_threshold,
+        data_source_notes=result.data_source_notes,
+        config_summary=result.config_summary,
+        disclaimer=threat_cfg.disclaimer,
+    )
+
+    return ThreatScreeningResponse(events=events, summary=summary)
+
+
+@router.post(
+    "/threats/screen",
+    response_model=ThreatScreeningResponse,
+    tags=["threats"],
+)
+def screen_threats_post(
+    body: ThreatScreeningRequest | None = None,
+) -> ThreatScreeningResponse:
+    """Screen catalogued space objects for close approaches to protected satellites.
+
+    Evaluates candidate threats using Layer 10 unified catalogue and Layer 9
+    risk-prioritization heuristics.
+
+    The returned threat score is a heuristic prioritization index for investigation,
+    NOT a collision probability (Pc).
+    """
+    req = body if body is not None else ThreatScreeningRequest()
+    return _execute_threat_screening(req)
+
+
+@router.get(
+    "/threats/screen",
+    response_model=ThreatScreeningResponse,
+    tags=["threats"],
+)
+def screen_threats_get(
+    screening_threshold_km: Annotated[
+        float,
+        Query(gt=0.0, le=1000.0, description="Screening distance threshold in km."),
+    ] = 50.0,
+    screening_window_hours: Annotated[
+        float,
+        Query(gt=0.0, le=168.0, description="Propagation window in hours."),
+    ] = 48.0,
+    max_threat_candidates: Annotated[
+        int,
+        Query(ge=1, le=200, description="Max candidate threat objects to screen."),
+    ] = 20,
+    max_protected_targets: Annotated[
+        int,
+        Query(ge=1, le=50, description="Max protected satellites to screen."),
+    ] = 5,
+    max_ranked_results: Annotated[
+        int,
+        Query(ge=1, le=200, description="Max ranked threat events to return."),
+    ] = 50,
+    stale_data_policy: Annotated[
+        str,
+        Query(description="Stale data policy: 'flag' or 'exclude'."),
+    ] = "flag",
+    threshold_km: Annotated[float | None, Query(description="Alias for screening_threshold_km.")] = None,
+    window_hours: Annotated[float | None, Query(description="Alias for screening_window_hours.")] = None,
+    max_candidates: Annotated[int | None, Query(description="Alias for max_threat_candidates.")] = None,
+    max_targets: Annotated[int | None, Query(description="Alias for max_protected_targets.")] = None,
+    stale_policy: Annotated[str | None, Query(description="Alias for stale_data_policy.")] = None,
+) -> ThreatScreeningResponse:
+    """GET query-string adapter for threat screening."""
+    effective_threshold = threshold_km if threshold_km is not None else screening_threshold_km
+    effective_window = window_hours if window_hours is not None else screening_window_hours
+    effective_candidates = max_candidates if max_candidates is not None else max_threat_candidates
+    effective_targets = max_targets if max_targets is not None else max_protected_targets
+    effective_policy = stale_policy if stale_policy is not None else stale_data_policy
+
+    if effective_policy not in ("flag", "exclude"):
+        raise HTTPException(
+            status_code=422,
+            detail="stale_data_policy must be 'flag' or 'exclude'.",
+        )
+    req = ThreatScreeningRequest(
+        screening_threshold_km=effective_threshold,
+        screening_window_hours=effective_window,
+        max_threat_candidates=effective_candidates,
+        max_protected_targets=effective_targets,
+        max_ranked_results=max_ranked_results,
+        stale_data_policy=effective_policy,
+    )
+    return _execute_threat_screening(req)

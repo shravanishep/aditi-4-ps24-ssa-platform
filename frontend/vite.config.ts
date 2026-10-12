@@ -20,6 +20,11 @@ export default defineConfig({
         changeOrigin: true,
         bypass: (req) => (req.headers.accept?.includes('text/html') ? '/index.html' : undefined),
       },
+      '/threats': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+        bypass: (req) => (req.headers.accept?.includes('text/html') ? '/index.html' : undefined),
+      },
     },
   },
 })

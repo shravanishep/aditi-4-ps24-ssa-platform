@@ -5,6 +5,7 @@ import { listSatellites } from '../api/satellites'
 import type { SatelliteBasicInfo } from '../types/api'
 import StatusBadge from '../components/common/StatusBadge'
 import LoadingSpinner from '../components/common/LoadingSpinner'
+import ThreatPrioritizationPanel from '../components/threats/ThreatPrioritizationPanel'
 
 type HealthStatus = 'loading' | 'ok' | 'error'
 
@@ -27,7 +28,7 @@ export default function DashboardPage() {
   }, [])
 
   return (
-    <div className="p-8 max-w-4xl">
+    <div className="p-8 max-w-5xl">
       {/* Title */}
       <h1 className="text-2xl font-bold text-slate-100 mb-1">
         ADITI 4.0 SSA Platform
@@ -51,6 +52,9 @@ export default function DashboardPage() {
           </span>
         </div>
       </section>
+
+      {/* Threat Prioritization & Screening */}
+      <ThreatPrioritizationPanel />
 
       {/* Satellite sample */}
       <section className="mb-8">

@@ -96,3 +96,81 @@ export interface TrajectoryResponse {
   step_sec: number
   points: TrajectoryPointResponse[]
 }
+
+/**
+ * Layer 11 Threat Prioritization interfaces
+ */
+
+export interface ThreatFactorItem {
+  description: string
+  raw_value_km?: number
+  raw_value_km_s?: number
+  raw_value_hours?: number
+  raw_value?: number | string
+  normalised: number
+  weight: number
+  contribution: number
+}
+
+export interface ThreatFactorBreakdown {
+  risk_score: number
+  risk_severity: 'critical' | 'warning' | 'low'
+  anomaly_data_available: boolean
+  factors: {
+    separation?: ThreatFactorItem
+    relative_velocity?: ThreatFactorItem
+    time_to_tca?: ThreatFactorItem
+    anomaly_score?: ThreatFactorItem
+    [key: string]: ThreatFactorItem | undefined
+  }
+  disclaimer?: string
+}
+
+export interface ThreatEvent {
+  protected_norad_id: number
+  protected_name: string
+  protected_classification: string
+  threat_norad_id: number
+  threat_name: string
+  threat_classification: string
+  threat_source_provenance: string
+  time_of_closest_approach: string
+  minimum_separation_km: number
+  relative_speed_km_s: number
+  hours_to_tca: number
+  threat_anomaly_score: number | null
+  threat_anomaly_severity: string
+  risk_score: number
+  risk_severity: 'critical' | 'warning' | 'low'
+  risk_explanation: ThreatFactorBreakdown
+  screening_notes: string[]
+}
+
+export interface ThreatScreeningSummary {
+  protected_count: number
+  candidates_screened: number
+  pairs_evaluated: number
+  events_within_threshold: number
+  data_source_notes: string[]
+  config_summary: Record<string, unknown>
+  disclaimer: string
+}
+
+export interface ThreatScreeningResponse {
+  events: ThreatEvent[]
+  summary: ThreatScreeningSummary
+}
+
+export interface ThreatScreeningRequest {
+  protected_norad_ids?: number[]
+  protect_all_active?: boolean
+  max_protected_targets?: number
+  screening_threshold_km?: number
+  screening_window_hours?: number
+  max_threat_candidates?: number
+  max_ranked_results?: number
+  coarse_step_sec?: number
+  fine_step_sec?: number
+  max_epoch_age_days?: number
+  stale_data_policy?: 'flag' | 'exclude'
+}
