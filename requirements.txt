@@ -6,3 +6,5 @@ fastapi
 uvicorn
 httpx
 pyarrow
+scikit-learn
+joblib

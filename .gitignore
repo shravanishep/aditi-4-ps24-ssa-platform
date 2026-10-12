@@ -33,5 +33,10 @@ data/processed/*.parquet
 data/processed/*.json
 !data/processed/.gitkeep
 
+# Trained ML models and model metadata
+models/*.joblib
+models/*.json
+!models/.gitkeep
+
 # Logs
 *.log
