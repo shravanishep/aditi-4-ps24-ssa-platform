@@ -271,3 +271,82 @@ class ThreatScreeningResponse(BaseModel):
 
     events: list[ThreatEventResponse]
     summary: ThreatScreeningSummary
+
+
+class SourceFreshnessResponse(BaseModel):
+    """Status metadata for an individual catalogue data source."""
+
+    source_name: str
+    url: str
+    dest_path: str
+    retrieved_at: Optional[str] = None
+    success: bool
+    error_message: Optional[str] = None
+    bytes_downloaded: int = 0
+    total_records: int = 0
+    valid_records: int = 0
+    rejected_records: int = 0
+    oldest_epoch: Optional[str] = None
+    newest_epoch: Optional[str] = None
+    max_epoch_age_days: Optional[float] = None
+    stale_records_count: int = 0
+    classification_source: str = "unknown"
+
+
+class CatalogStatusResponse(BaseModel):
+    """Read-only catalogue and data refresh status response."""
+
+    last_refresh_attempt: Optional[str] = None
+    last_successful_refresh: Optional[str] = None
+    refresh_status: str  # "success", "failed", "partial", "unrefreshed"
+    total_objects: int
+    active_satellites: int
+    with_orbital_data: int
+    stale_objects: int
+    oldest_epoch: Optional[str] = None
+    newest_epoch: Optional[str] = None
+    max_epoch_age_days: Optional[float] = None
+    sources: dict[str, SourceFreshnessResponse]
+    warnings: list[str]
+    data_source_notes: list[str]
+    disclaimer: str
+    orbit_regimes: dict[str, int] = Field(
+        default_factory=dict,
+        description="Count of objects by orbital regime (LEO, MEO, GEO, Other).",
+    )
+    classifications: dict[str, int] = Field(
+        default_factory=dict,
+        description="Count of objects by classification category.",
+    )
+
+
+class MultiPropagatedObjectState(BaseModel):
+    """Propagated orbital state and metadata for a single space object at a point in time."""
+
+    norad_cat_id: int
+    object_name: str
+    classification: str
+    classification_source: str
+    epoch: Optional[str] = None
+    epoch_age_days: Optional[float] = None
+    is_stale: bool = False
+    position_x_km: float
+    position_y_km: float
+    position_z_km: float
+    velocity_x_km_s: float
+    velocity_y_km_s: float
+    velocity_z_km_s: float
+    altitude_km: float
+    speed_km_s: float
+    sgp4_error: int
+
+
+class MultiPropagatedOrbitResponse(BaseModel):
+    """Response containing bounded propagated states for multiple catalogued space objects."""
+
+    timestamp: datetime
+    total_matching: int
+    propagated_count: int
+    objects: list[MultiPropagatedObjectState]
+    data_source_notes: list[str]
+    disclaimer: str

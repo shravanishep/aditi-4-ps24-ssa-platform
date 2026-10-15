@@ -25,19 +25,36 @@ export class ApiError extends Error {
   }
 }
 
-async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
+async function apiFetch<T>(
+  path: string,
+  options?: RequestInit & { timeoutMs?: number },
+): Promise<T> {
+  const timeoutMs = options?.timeoutMs ?? 60000
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+
   let response: Response
 
   try {
     response = await fetch(`${BASE}${path}`, {
+      signal: controller.signal,
       headers: { 'Content-Type': 'application/json' },
       ...options,
     })
-  } catch {
+  } catch (err: unknown) {
+    clearTimeout(timer)
+    if (err instanceof Error && err.name === 'AbortError') {
+      throw new ApiError(
+        408,
+        `Request timed out after ${timeoutMs / 1000}s — server took too long to complete calculation.`,
+      )
+    }
     throw new ApiError(
       0,
       'Backend unavailable — ensure the FastAPI server is running on port 8000.',
     )
+  } finally {
+    clearTimeout(timer)
   }
 
   if (!response.ok) {

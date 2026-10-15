@@ -8,10 +8,12 @@ import type { ThreatScreeningRequest, ThreatScreeningResponse } from '../types/a
  * Returns ranked candidate threat events with contributing factors.
  */
 export async function screenThreats(
-  params?: ThreatScreeningRequest
+  params?: ThreatScreeningRequest,
+  timeoutMs = 90000,
 ): Promise<ThreatScreeningResponse> {
   return apiFetch<ThreatScreeningResponse>('/threats/screen', {
     method: 'POST',
     body: JSON.stringify(params ?? {}),
+    timeoutMs,
   })
 }

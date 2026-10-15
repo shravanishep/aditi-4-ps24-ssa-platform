@@ -10,6 +10,7 @@ No orbital propagation, distance, or conjunction logic lives here.
 
 from __future__ import annotations
 
+import math
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Annotated
@@ -30,12 +31,18 @@ from backend.orbital.sgp4_propagator import propagate_orbit
 from ml.models.threat_config import ThreatConfig
 from ml.models.threat_prioritization import screen_threats_from_catalog
 
+from backend.refresh.metadata import RefreshMetadata
+
 from .schemas import (
+    CatalogStatusResponse,
     CloseApproachResultResponse,
     ConjunctionAnalysisRequest,
+    MultiPropagatedObjectState,
+    MultiPropagatedOrbitResponse,
     PropagatedOrbitStateResponse,
     SatelliteBasicInfo,
     SatelliteGPInfo,
+    SourceFreshnessResponse,
     ThreatEventResponse,
     ThreatScreeningRequest,
     ThreatScreeningResponse,
@@ -52,8 +59,15 @@ router = APIRouter()
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _GP_CSV = _PROJECT_ROOT / "data" / "raw" / "active_satellites_gp.csv"
 _SATCAT_CSV = _PROJECT_ROOT / "data" / "raw" / "satcat.csv"
+_METADATA_PATH = _PROJECT_ROOT / "data" / "catalog_refresh_metadata.json"
 
-_DEFAULT_CATALOG_CACHE: tuple[Path, float, UnifiedCatalog] | None = None
+_DEFAULT_CATALOG_CACHE: tuple[float, float, UnifiedCatalog] | None = None
+
+
+def invalidate_catalog_cache() -> None:
+    """Invalidate in-process cached UnifiedCatalog instance."""
+    global _DEFAULT_CATALOG_CACHE
+    _DEFAULT_CATALOG_CACHE = None
 
 
 def _get_or_build_catalog(
@@ -87,15 +101,20 @@ def _get_or_build_catalog(
         )
         return build_unified_catalog(cfg)
 
-    # Use cached default catalogue if active_satellites_gp.csv hasn't changed
+    # Check modification timestamps of both GP data and SATCAT metadata files
     try:
-        mtime = _GP_CSV.stat().st_mtime
+        gp_mtime = _GP_CSV.stat().st_mtime if _GP_CSV.exists() else 0.0
     except OSError:
-        mtime = 0.0
+        gp_mtime = 0.0
+
+    try:
+        satcat_mtime = _SATCAT_CSV.stat().st_mtime if _SATCAT_CSV.exists() else 0.0
+    except OSError:
+        satcat_mtime = 0.0
 
     if _DEFAULT_CATALOG_CACHE is not None:
-        cached_path, cached_mtime, cached_cat = _DEFAULT_CATALOG_CACHE
-        if cached_path == _GP_CSV and cached_mtime == mtime:
+        cached_gp_mtime, cached_satcat_mtime, cached_cat = _DEFAULT_CATALOG_CACHE
+        if cached_gp_mtime == gp_mtime and cached_satcat_mtime == satcat_mtime:
             return cached_cat
 
     cfg = CatalogConfig(
@@ -113,7 +132,7 @@ def _get_or_build_catalog(
         stale_data_policy="flag",
     )
     cat = build_unified_catalog(cfg)
-    _DEFAULT_CATALOG_CACHE = (_GP_CSV, mtime, cat)
+    _DEFAULT_CATALOG_CACHE = (gp_mtime, satcat_mtime, cat)
     return cat
 
 
@@ -164,6 +183,169 @@ def list_satellites(
         )
         for _, row in subset.iterrows()
     ]
+
+
+@router.get(
+    "/satellites/multi-propagate",
+    response_model=MultiPropagatedOrbitResponse,
+    tags=["satellites"],
+)
+def multi_propagate_satellites(
+    limit: Annotated[
+        int,
+        Query(ge=1, le=200, description="Max objects to propagate (bounded [1, 200])."),
+    ] = 50,
+    offset: Annotated[
+        int,
+        Query(ge=0, description="Pagination offset into matching catalogue objects."),
+    ] = 0,
+    target_time: Annotated[
+        str | None,
+        Query(description="Target UTC ISO timestamp for SGP4 propagation. Defaults to now."),
+    ] = None,
+    category: Annotated[
+        str | None,
+        Query(description="Filter by classification, e.g. ACTIVE_SATELLITE, INACTIVE_SATELLITE."),
+    ] = None,
+    search: Annotated[
+        str | None,
+        Query(description="Search substring in object name or NORAD ID."),
+    ] = None,
+    regime: Annotated[
+        str | None,
+        Query(description="Filter by orbital regime (LEO, MEO, GEO, OTHER)."),
+    ] = None,
+    norad_ids: Annotated[
+        str | None,
+        Query(description="Comma-separated explicit NORAD IDs to propagate."),
+    ] = None,
+) -> MultiPropagatedOrbitResponse:
+    """Propagate a bounded set of catalogue objects to a specific UTC epoch for 3D multi-object visualization."""
+    if target_time:
+        try:
+            target_dt = datetime.fromisoformat(target_time.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid target_time ISO format '{target_time}': {exc}",
+            ) from exc
+    else:
+        target_dt = datetime.now(timezone.utc)
+
+    catalog = _get_or_build_catalog()
+
+    # Filter objects that have valid orbital records
+    candidates = [
+        o for o in catalog
+        if o.has_orbital_data and o.orbital_record is not None
+    ]
+
+    # Filter by explicit NORAD IDs if requested
+    if norad_ids:
+        try:
+            target_ids = {int(x.strip()) for x in norad_ids.split(",") if x.strip()}
+            candidates = [o for o in candidates if o.norad_cat_id in target_ids]
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid comma-separated NORAD IDs in norad_ids query parameter: {exc}",
+            ) from exc
+
+    # Filter by classification if requested
+    if category:
+        cat_clean = category.strip().upper()
+        candidates = [
+            o for o in candidates
+            if o.classification.value.upper() == cat_clean
+            or o.classification.name.upper() == cat_clean
+        ]
+
+    # Filter by regime if requested
+    if regime:
+        reg_clean = regime.strip().upper()
+        if reg_clean == "LEO":
+            candidates = [
+                o for o in candidates
+                if o.orbital_record and float(o.orbital_record.get("MEAN_MOTION", 0.0)) >= 11.25
+            ]
+        elif reg_clean == "MEO":
+            candidates = [
+                o for o in candidates
+                if o.orbital_record and 1.05 <= float(o.orbital_record.get("MEAN_MOTION", 0.0)) < 11.25
+            ]
+        elif reg_clean == "GEO":
+            candidates = [
+                o for o in candidates
+                if o.orbital_record and 0.95 <= float(o.orbital_record.get("MEAN_MOTION", 0.0)) < 1.05
+            ]
+        elif reg_clean in ("OTHER", "HEO"):
+            candidates = [
+                o for o in candidates
+                if o.orbital_record and float(o.orbital_record.get("MEAN_MOTION", 0.0)) < 0.95
+            ]
+
+    # Filter by search string if requested
+    if search:
+        s_clean = search.strip().upper()
+        candidates = [
+            o for o in candidates
+            if s_clean in o.object_name.upper() or s_clean in str(o.norad_cat_id)
+        ]
+
+    total_matching = len(candidates)
+    sliced_objs = candidates[offset : offset + limit]
+
+    propagated_results: list[MultiPropagatedObjectState] = []
+    for obj in sliced_objs:
+        try:
+            st = propagate_orbit(obj.orbital_record, target_dt)
+            r_km = math.sqrt(st.position_x_km**2 + st.position_y_km**2 + st.position_z_km**2)
+            alt_km = round(r_km - 6378.137, 2)
+            v_kms = math.sqrt(st.velocity_x_km_s**2 + st.velocity_y_km_s**2 + st.velocity_z_km_s**2)
+            speed_kms = round(v_kms, 4)
+
+            propagated_results.append(
+                MultiPropagatedObjectState(
+                    norad_cat_id=obj.norad_cat_id,
+                    object_name=obj.object_name,
+                    classification=obj.classification.value,
+                    classification_source=obj.classification_source,
+                    epoch=obj.epoch.isoformat() if obj.epoch else None,
+                    epoch_age_days=obj.epoch_age_days,
+                    is_stale=obj.is_stale,
+                    position_x_km=round(st.position_x_km, 4),
+                    position_y_km=round(st.position_y_km, 4),
+                    position_z_km=round(st.position_z_km, 4),
+                    velocity_x_km_s=round(st.velocity_x_km_s, 6),
+                    velocity_y_km_s=round(st.velocity_y_km_s, 6),
+                    velocity_z_km_s=round(st.velocity_z_km_s, 6),
+                    altitude_km=alt_km,
+                    speed_km_s=speed_kms,
+                    sgp4_error=st.sgp4_error,
+                )
+            )
+        except Exception:
+            # Skip propagation failures gracefully
+            continue
+
+    data_notes = [
+        f"Catalogue contains {total_matching} matching objects with orbital data.",
+        f"Propagated {len(propagated_results)} objects to {target_dt.isoformat()}.",
+    ]
+    if not _SATCAT_CSV.exists():
+        data_notes.append("SATCAT metadata is not loaded; object classifications are based on source hints.")
+
+    return MultiPropagatedOrbitResponse(
+        timestamp=target_dt,
+        total_matching=total_matching,
+        propagated_count=len(propagated_results),
+        objects=propagated_results,
+        data_source_notes=data_notes,
+        disclaimer=(
+            "Positions are calculated via analytical SGP4 propagation from public orbital data. "
+            "SGP4 error grows over time and positions are advisory for research visualization."
+        ),
+    )
 
 
 @router.get("/satellites/{norad_id}", response_model=SatelliteGPInfo, tags=["satellites"])
@@ -648,3 +830,136 @@ def screen_threats_get(
         stale_data_policy=effective_policy,
     )
     return _execute_threat_screening(req)
+
+
+# ---------------------------------------------------------------------------
+# Catalogue & Refresh Freshness Status (Layer 12)
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "/catalog/status",
+    response_model=CatalogStatusResponse,
+    tags=["catalog"],
+)
+def get_catalog_status() -> CatalogStatusResponse:
+    """Retrieve current catalogue freshness and automated data refresh metadata.
+
+    Read-only status endpoint. Does not trigger remote downloads or mutations.
+    """
+    refresh_meta = RefreshMetadata.load(_METADATA_PATH)
+    catalog = _get_or_build_catalog()
+
+    now = datetime.now(timezone.utc)
+    total_objects = len(catalog)
+    active_satellites = len(catalog.get_active_satellites())
+    with_orbital = sum(1 for o in catalog if o.has_orbital_data)
+    stale_count = sum(1 for o in catalog if o.is_stale)
+
+    epochs = [o.epoch for o in catalog if o.epoch is not None]
+    oldest_epoch_str = min(epochs).isoformat() if epochs else None
+    newest_epoch_str = max(epochs).isoformat() if epochs else None
+    max_epoch_age_days = (
+        round(max((now - e).total_seconds() / 86400.0 for e in epochs), 2)
+        if epochs
+        else None
+    )
+
+    sources_map: dict[str, SourceFreshnessResponse] = {}
+    if refresh_meta.sources:
+        for name, src in refresh_meta.sources.items():
+            sources_map[name] = SourceFreshnessResponse(
+                source_name=src.source_name,
+                url=src.url,
+                dest_path=src.dest_path,
+                retrieved_at=src.retrieved_at,
+                success=src.success,
+                error_message=src.error_message,
+                bytes_downloaded=src.bytes_downloaded,
+                total_records=src.total_records,
+                valid_records=src.valid_records,
+                rejected_records=src.rejected_records,
+                oldest_epoch=src.oldest_epoch,
+                newest_epoch=src.newest_epoch,
+                max_epoch_age_days=src.max_epoch_age_days,
+                stale_records_count=src.stale_records_count,
+                classification_source=src.classification_source,
+            )
+    else:
+        # Default baseline if refresh metadata file does not exist yet
+        sources_map["active_satellites_gp"] = SourceFreshnessResponse(
+            source_name="active_satellites_gp",
+            url="https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=csv",
+            dest_path=str(_GP_CSV),
+            retrieved_at=None,
+            success=True,
+            bytes_downloaded=_GP_CSV.stat().st_size if _GP_CSV.exists() else 0,
+            total_records=total_objects,
+            valid_records=with_orbital,
+            rejected_records=0,
+            oldest_epoch=oldest_epoch_str,
+            newest_epoch=newest_epoch_str,
+            max_epoch_age_days=max_epoch_age_days,
+            stale_records_count=stale_count,
+            classification_source="source_group_hint",
+        )
+
+    warnings: list[str] = [
+        "Data retrieval timestamp reflects file download time, NOT orbital element generation epoch."
+    ]
+    if max_epoch_age_days is not None and max_epoch_age_days > 14.0:
+        warnings.append(
+            f"Orbital elements have an epoch age of {max_epoch_age_days:.1f} days. "
+            "Propagation accuracy degrades over time; predictions are advisory."
+        )
+    if refresh_meta.status == "failed":
+        warnings.append(
+            "Latest automated refresh attempt failed. Preserving last known valid catalogue snapshot."
+        )
+
+    data_notes = [
+        "Catalogue currently contains active satellites from CelesTrak GP dataset.",
+        "Classification is based on SATCAT metadata where available, or source group hints.",
+    ]
+    if not _SATCAT_CSV.exists():
+        data_notes.append("SATCAT metadata file not present; classifications are based on source group hints.")
+
+    regimes = {"LEO": 0, "MEO": 0, "GEO": 0, "Other": 0}
+    classifications_map: dict[str, int] = {}
+    for o in catalog:
+        cls_val = o.classification.value
+        classifications_map[cls_val] = classifications_map.get(cls_val, 0) + 1
+        if o.orbital_record:
+            try:
+                mm = float(o.orbital_record.get("MEAN_MOTION", 0.0))
+                if mm >= 11.25:
+                    regimes["LEO"] += 1
+                elif 1.05 <= mm < 11.25:
+                    regimes["MEO"] += 1
+                elif 0.95 <= mm < 1.05:
+                    regimes["GEO"] += 1
+                else:
+                    regimes["Other"] += 1
+            except (ValueError, TypeError):
+                regimes["Other"] += 1
+
+    return CatalogStatusResponse(
+        last_refresh_attempt=refresh_meta.last_refresh_attempt,
+        last_successful_refresh=refresh_meta.last_successful_refresh,
+        refresh_status=refresh_meta.status,
+        total_objects=total_objects,
+        active_satellites=active_satellites,
+        with_orbital_data=with_orbital,
+        stale_objects=stale_count,
+        oldest_epoch=oldest_epoch_str,
+        newest_epoch=newest_epoch_str,
+        max_epoch_age_days=max_epoch_age_days,
+        sources=sources_map,
+        warnings=warnings,
+        data_source_notes=data_notes,
+        disclaimer=(
+            "Calculated threat scores and conjunction analyses are heuristic priority indices. "
+            "They are NOT certified collision probabilities and must not be used for operational avoidance maneuvers."
+        ),
+        orbit_regimes=regimes,
+        classifications=classifications_map,
+    )

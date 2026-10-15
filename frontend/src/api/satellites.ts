@@ -24,3 +24,33 @@ export const getOrbit = (
   apiFetch<PropagatedOrbitStateResponse>(
     `/satellites/${noradId}/orbit?timestamp=${encodeURIComponent(timestamp)}`,
   )
+
+export interface MultiPropagateParams {
+  timestamp?: string
+  limit?: number
+  offset?: number
+  category?: string
+  regime?: string
+  search?: string
+  noradIds?: string
+}
+
+/**
+ * Propagate a bounded set of catalogue objects to a specific UTC epoch.
+ */
+export const multiPropagateSatellites = (
+  params?: MultiPropagateParams,
+): Promise<import('../types/api').MultiPropagatedOrbitResponse> => {
+  const query = new URLSearchParams()
+  if (params?.timestamp) query.set('target_time', params.timestamp)
+  if (params?.limit) query.set('limit', params.limit.toString())
+  if (params?.offset) query.set('offset', params.offset.toString())
+  if (params?.category) query.set('category', params.category)
+  if (params?.regime) query.set('regime', params.regime)
+  if (params?.search) query.set('search', params.search)
+  if (params?.noradIds) query.set('norad_ids', params.noradIds)
+  const qs = query.toString()
+  return apiFetch<import('../types/api').MultiPropagatedOrbitResponse>(
+    `/satellites/multi-propagate${qs ? `?${qs}` : ''}`,
+  )
+}

@@ -1,17 +1,19 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { screenThreats } from '../../api/threats'
 import type { ThreatEvent, ThreatScreeningResponse, ThreatScreeningRequest } from '../../types/api'
 import LoadingSpinner from '../common/LoadingSpinner'
 
 export default function ThreatPrioritizationPanel() {
   const [data, setData] = useState<ThreatScreeningResponse | null>(null)
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [expandedIndex, setExpandedIndex] = useState<number | null>(null)
 
   // User screening controls
   const [thresholdKm, setThresholdKm] = useState<number>(50.0)
-  const [maxCandidates, setMaxCandidates] = useState<number>(20)
+  const [maxCandidates, setMaxCandidates] = useState<number>(10)
+  const [protectedCount, setProtectedCount] = useState<number>(2)
+  const [windowHours, setWindowHours] = useState<number>(24.0)
   const [stalePolicy, setStalePolicy] = useState<'flag' | 'exclude'>('flag')
 
   const fetchThreats = (params?: Partial<ThreatScreeningRequest>) => {
@@ -21,14 +23,14 @@ export default function ThreatPrioritizationPanel() {
     const req: ThreatScreeningRequest = {
       screening_threshold_km: params?.screening_threshold_km ?? thresholdKm,
       max_threat_candidates: params?.max_threat_candidates ?? maxCandidates,
+      max_protected_targets: params?.max_protected_targets ?? protectedCount,
+      screening_window_hours: params?.screening_window_hours ?? windowHours,
       stale_data_policy: params?.stale_data_policy ?? stalePolicy,
-      max_protected_targets: 5,
-      screening_window_hours: 48.0,
       coarse_step_sec: 120.0,
       fine_step_sec: 1.0,
     }
 
-    screenThreats(req)
+    screenThreats(req, 90000)
       .then((res) => {
         setData(res)
         setError(null)
@@ -40,10 +42,6 @@ export default function ThreatPrioritizationPanel() {
         setLoading(false)
       })
   }
-
-  useEffect(() => {
-    fetchThreats()
-  }, [])
 
   const handleRefresh = () => {
     fetchThreats()
@@ -79,8 +77,11 @@ export default function ThreatPrioritizationPanel() {
     }
   }
 
+  const highPriorityCount = data?.events.filter((e) => e.risk_severity.toLowerCase() === 'critical').length ?? 0
+  const topEvent = data?.events && data.events.length > 0 ? data.events[0] : null
+
   return (
-    <section className="bg-slate-800 border border-slate-700 rounded-lg p-6 mb-8">
+    <section className="bg-slate-800 border border-slate-700 rounded-lg p-6 mb-8" id="threat-prioritization-panel">
       {/* Title & Actions */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4">
         <div>
@@ -91,7 +92,7 @@ export default function ThreatPrioritizationPanel() {
             </span>
           </h2>
           <p className="text-slate-400 text-xs mt-1">
-            Catalogue-wide close-approach evaluation against active satellites using SGP4 propagation.
+            Catalogue-wide close-approach ranking using analytical SGP4 propagation and heuristic scoring.
           </p>
         </div>
 
@@ -99,10 +100,10 @@ export default function ThreatPrioritizationPanel() {
           <button
             onClick={handleRefresh}
             disabled={loading}
-            className="px-3 py-1.5 bg-cyan-700 hover:bg-cyan-600 disabled:bg-slate-700 text-white rounded text-xs font-medium transition-colors flex items-center gap-1.5"
+            className="px-4 py-2 bg-cyan-700 hover:bg-cyan-600 disabled:bg-slate-700 text-white rounded text-xs font-semibold transition-colors flex items-center gap-2 cursor-pointer disabled:cursor-not-allowed shadow"
           >
             {loading ? <LoadingSpinner size="sm" /> : <span>↻</span>}
-            <span>{loading ? 'Screening…' : 'Run Screening'}</span>
+            <span>{loading ? 'Screening In Progress…' : 'Run Threat Screening'}</span>
           </button>
         </div>
       </div>
@@ -121,9 +122,9 @@ export default function ThreatPrioritizationPanel() {
       </div>
 
       {/* Screening Controls */}
-      <div className="bg-slate-900 border border-slate-700/80 rounded-md p-3 mb-5 flex flex-wrap items-center gap-4 text-xs">
+      <div className="bg-slate-900 border border-slate-700/80 rounded-md p-3.5 mb-5 flex flex-wrap items-center gap-4 text-xs">
         <div className="flex items-center gap-2">
-          <label htmlFor="threat-threshold" className="text-slate-400">
+          <label htmlFor="threat-threshold" className="text-slate-400 font-medium">
             Threshold (km):
           </label>
           <input
@@ -134,38 +135,70 @@ export default function ThreatPrioritizationPanel() {
             step="5"
             value={thresholdKm}
             onChange={(e) => setThresholdKm(Math.max(1, parseFloat(e.target.value) || 1))}
-            className="w-20 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-slate-200 font-mono focus:border-cyan-500 focus:outline-none"
+            className="w-20 bg-slate-800 border border-slate-700 rounded px-2.5 py-1 text-slate-200 font-mono focus:border-cyan-500 focus:outline-none"
           />
         </div>
 
         <div className="flex items-center gap-2">
-          <label htmlFor="threat-candidates" className="text-slate-400">
-            Max Candidates:
+          <label htmlFor="threat-targets" className="text-slate-400 font-medium">
+            Targets:
+          </label>
+          <select
+            id="threat-targets"
+            value={protectedCount}
+            onChange={(e) => setProtectedCount(parseInt(e.target.value, 10))}
+            className="bg-slate-800 border border-slate-700 rounded px-2.5 py-1 text-slate-200 focus:border-cyan-500 focus:outline-none"
+          >
+            <option value="2">2 targets (Fast · ~5s)</option>
+            <option value="5">5 targets (Standard · ~15s)</option>
+            <option value="10">10 targets (Extended · ~30s)</option>
+          </select>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <label htmlFor="threat-candidates" className="text-slate-400 font-medium">
+            Candidates:
           </label>
           <select
             id="threat-candidates"
             value={maxCandidates}
             onChange={(e) => setMaxCandidates(parseInt(e.target.value, 10))}
-            className="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-slate-200 focus:border-cyan-500 focus:outline-none"
+            className="bg-slate-800 border border-slate-700 rounded px-2.5 py-1 text-slate-200 focus:border-cyan-500 focus:outline-none"
           >
+            <option value="5">5 objects</option>
             <option value="10">10 objects</option>
             <option value="20">20 objects</option>
-            <option value="50">50 objects</option>
           </select>
         </div>
 
         <div className="flex items-center gap-2">
-          <label htmlFor="threat-stale-policy" className="text-slate-400">
-            Stale Data Policy:
+          <label htmlFor="threat-window" className="text-slate-400 font-medium">
+            Window:
+          </label>
+          <select
+            id="threat-window"
+            value={windowHours}
+            onChange={(e) => setWindowHours(parseFloat(e.target.value))}
+            className="bg-slate-800 border border-slate-700 rounded px-2.5 py-1 text-slate-200 focus:border-cyan-500 focus:outline-none"
+          >
+            <option value="12">12 hours</option>
+            <option value="24">24 hours</option>
+            <option value="48">48 hours</option>
+          </select>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <label htmlFor="threat-stale-policy" className="text-slate-400 font-medium">
+            Stale Data:
           </label>
           <select
             id="threat-stale-policy"
             value={stalePolicy}
             onChange={(e) => setStalePolicy(e.target.value as 'flag' | 'exclude')}
-            className="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-slate-200 focus:border-cyan-500 focus:outline-none"
+            className="bg-slate-800 border border-slate-700 rounded px-2.5 py-1 text-slate-200 focus:border-cyan-500 focus:outline-none"
           >
-            <option value="flag">Flag with visible warning</option>
-            <option value="exclude">Exclude stale objects</option>
+            <option value="flag">Flag with warning</option>
+            <option value="exclude">Exclude stale</option>
           </select>
         </div>
       </div>
@@ -186,19 +219,36 @@ export default function ThreatPrioritizationPanel() {
         </div>
       )}
 
-      {/* Loading state */}
-      {loading && !data && (
-        <div className="py-12 flex flex-col items-center justify-center gap-3 text-slate-400 text-sm">
+      {/* Loading state indicator */}
+      {loading && (
+        <div className="py-8 flex flex-col items-center justify-center gap-3 text-slate-300 text-xs bg-slate-900/60 rounded-lg border border-slate-700/80 mb-4">
           <LoadingSpinner size="md" />
-          <span>Screening catalogue objects and propagating orbits…</span>
+          <span className="font-semibold text-slate-200">
+            Evaluating SGP4 Conjunctions & Computing Prioritization Scores…
+          </span>
+          <span className="text-slate-400 text-[11px]">
+            Evaluating {protectedCount} protected targets against {maxCandidates} candidate orbits across {windowHours}h window.
+          </span>
+        </div>
+      )}
+
+      {/* Initial Ready State when screening has not run yet */}
+      {!loading && !data && !error && (
+        <div className="bg-slate-900/40 border border-slate-700/60 rounded-lg p-6 text-center text-xs text-slate-400 space-y-3">
+          <p className="text-slate-300 font-medium">
+            Screening parameters configured. Ready to evaluate close approach encounters.
+          </p>
+          <p className="text-slate-500 text-[11px] max-w-xl mx-auto">
+            Click <strong className="text-cyan-400">Run Threat Screening</strong> above to initiate analytical SGP4 propagation and rank potential conjunctions by geometric miss distance and relative velocity.
+          </p>
         </div>
       )}
 
       {/* Results content */}
-      {data && (
+      {!loading && data && (
         <div>
           {/* Summary Stats Strip */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-5">
             <div className="bg-slate-900 border border-slate-700 rounded p-2.5">
               <span className="text-[11px] text-slate-400 uppercase tracking-wider block">
                 Protected Targets
@@ -225,13 +275,60 @@ export default function ThreatPrioritizationPanel() {
             </div>
             <div className="bg-slate-900 border border-slate-700 rounded p-2.5">
               <span className="text-[11px] text-slate-400 uppercase tracking-wider block">
-                Events Within Threshold
+                Events Found
               </span>
               <span className="text-lg font-mono font-semibold text-amber-400">
                 {data.summary.events_within_threshold}
               </span>
             </div>
+            <div className="bg-slate-900 border border-slate-700 rounded p-2.5">
+              <span className="text-[11px] text-slate-400 uppercase tracking-wider block">
+                High Priority
+              </span>
+              <span className="text-lg font-mono font-semibold text-rose-400">
+                {highPriorityCount}
+              </span>
+            </div>
           </div>
+
+          {/* Top Priority Event Highlight Banner if any events */}
+          {topEvent && (
+            <div className="bg-slate-900/90 border border-cyan-800/80 rounded-lg p-4 mb-4">
+              <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+                <span className="text-xs font-semibold text-cyan-300 uppercase tracking-wider flex items-center gap-1.5">
+                  <span>★</span>
+                  <span>Highest Priority Threat Event</span>
+                </span>
+                <span
+                  className={`text-xs px-2.5 py-0.5 rounded-full border font-semibold uppercase ${getSeverityBadge(
+                    topEvent.risk_severity,
+                  )}`}
+                >
+                  {topEvent.risk_severity} (Score {topEvent.risk_score.toFixed(3)})
+                </span>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-3 text-xs">
+                <div>
+                  <span className="text-slate-400 block text-[11px]">Encounter Pair</span>
+                  <span className="font-semibold text-slate-100">{topEvent.protected_name}</span>
+                  <span className="text-slate-400"> vs </span>
+                  <span className="font-semibold text-slate-100">{topEvent.threat_name}</span>
+                </div>
+                <div>
+                  <span className="text-slate-400 block text-[11px]">Separation Distance</span>
+                  <span className="font-mono font-bold text-amber-300">
+                    {topEvent.minimum_separation_km.toFixed(2)} km
+                  </span>
+                </div>
+                <div>
+                  <span className="text-slate-400 block text-[11px]">Time to TCA</span>
+                  <span className="font-mono text-cyan-300">
+                    {topEvent.hours_to_tca.toFixed(1)} hours
+                  </span>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Empty state */}
           {data.events.length === 0 ? (
@@ -240,8 +337,8 @@ export default function ThreatPrioritizationPanel() {
                 No threat events within {thresholdKm.toFixed(1)} km threshold
               </p>
               <p className="text-xs text-slate-500">
-                Screened {data.summary.pairs_evaluated} orbital pairs over the propagation window.
-                Try adjusting the screening threshold or candidate limits.
+                Screened {data.summary.pairs_evaluated} orbital pairs over the {windowHours}h propagation window.
+                Try expanding the threshold distance or candidate limits.
               </p>
             </div>
           ) : (
@@ -250,7 +347,7 @@ export default function ThreatPrioritizationPanel() {
               {data.events.map((event: ThreatEvent, index: number) => {
                 const isExpanded = expandedIndex === index
                 const hasStaleWarning = event.screening_notes.some((n) =>
-                  n.includes('STALE ORBITAL DATA')
+                  n.includes('STALE ORBITAL DATA'),
                 )
                 const isUnverified =
                   event.threat_source_provenance.includes('hint') ||
@@ -270,7 +367,7 @@ export default function ThreatPrioritizationPanel() {
 
                         <span
                           className={`text-xs px-2.5 py-0.5 rounded-full border font-semibold uppercase tracking-wider ${getSeverityBadge(
-                            event.risk_severity
+                            event.risk_severity,
                           )}`}
                         >
                           {event.risk_severity} Priority
@@ -317,7 +414,7 @@ export default function ThreatPrioritizationPanel() {
                           </div>
                           <span
                             className={`text-[10px] px-2 py-0.5 rounded border font-medium ${getClassificationBadge(
-                              event.protected_classification
+                              event.protected_classification,
                             )}`}
                           >
                             {event.protected_classification}
@@ -342,7 +439,7 @@ export default function ThreatPrioritizationPanel() {
                           <div className="text-right">
                             <span
                               className={`text-[10px] px-2 py-0.5 rounded border font-medium ${getClassificationBadge(
-                                event.threat_classification
+                                event.threat_classification,
                               )}`}
                             >
                               {event.threat_classification}

@@ -6,6 +6,7 @@ import type { SatelliteBasicInfo } from '../types/api'
 import StatusBadge from '../components/common/StatusBadge'
 import LoadingSpinner from '../components/common/LoadingSpinner'
 import ThreatPrioritizationPanel from '../components/threats/ThreatPrioritizationPanel'
+import CatalogFreshnessCard from '../components/catalog/CatalogFreshnessCard'
 
 type HealthStatus = 'loading' | 'ok' | 'error'
 
@@ -53,6 +54,9 @@ export default function DashboardPage() {
         </div>
       </section>
 
+      {/* Catalogue Freshness & Sync Status */}
+      <CatalogFreshnessCard />
+
       {/* Threat Prioritization & Screening */}
       <ThreatPrioritizationPanel />
 
@@ -96,7 +100,7 @@ export default function DashboardPage() {
         <h2 className="text-xs font-semibold text-slate-500 uppercase tracking-widest mb-3">
           Analysis Tools
         </h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <Link
             to="/satellites"
             className="block bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-cyan-700 rounded-lg p-5 transition-colors group"
@@ -105,7 +109,7 @@ export default function DashboardPage() {
               Satellite Explorer
             </p>
             <p className="text-slate-400 text-sm">
-              Search by NORAD ID. View GP orbital parameters and propagate position and velocity to any UTC time.
+              Search by NORAD ID. View GP orbital parameters, altitude gauge, parameter guides, and propagate orbits.
             </p>
           </Link>
           <Link
@@ -116,7 +120,18 @@ export default function DashboardPage() {
               Conjunction Analysis
             </p>
             <p className="text-slate-400 text-sm">
-              Find the approximate Time of Closest Approach between two objects using SGP4 propagation.
+              Find the approximate Time of Closest Approach (TCA) and miss distance between objects using SGP4.
+            </p>
+          </Link>
+          <Link
+            to="/globe"
+            className="block bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-cyan-700 rounded-lg p-5 transition-colors group"
+          >
+            <p className="text-base font-semibold text-slate-100 group-hover:text-cyan-300 mb-1">
+              3D Globe Visualization
+            </p>
+            <p className="text-slate-400 text-sm">
+              Interactive 3D Earth globe. Render multi-object constellations, filter by LEO/MEO/GEO, and plot trajectory arcs.
             </p>
           </Link>
         </div>

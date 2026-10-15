@@ -174,3 +174,76 @@ export interface ThreatScreeningRequest {
   max_epoch_age_days?: number
   stale_data_policy?: 'flag' | 'exclude'
 }
+
+/**
+ * Layer 12 Catalogue & Data Refresh Status interfaces
+ */
+
+export interface SourceFreshness {
+  source_name: string
+  url: string
+  dest_path: string
+  retrieved_at: string | null
+  success: boolean
+  error_message?: string | null
+  bytes_downloaded: number
+  total_records: number
+  valid_records: number
+  rejected_records: number
+  oldest_epoch?: string | null
+  newest_epoch?: string | null
+  max_epoch_age_days?: number | null
+  stale_records_count: number
+  classification_source: string
+}
+
+export interface CatalogStatusResponse {
+  last_refresh_attempt: string | null
+  last_successful_refresh: string | null
+  refresh_status: 'success' | 'failed' | 'partial' | 'unrefreshed'
+  total_objects: number
+  active_satellites: number
+  with_orbital_data: number
+  stale_objects: number
+  oldest_epoch: string | null
+  newest_epoch: string | null
+  max_epoch_age_days: number | null
+  sources: Record<string, SourceFreshness>
+  warnings: string[]
+  data_source_notes: string[]
+  disclaimer: string
+  orbit_regimes?: Record<string, number>
+  classifications?: Record<string, number>
+}
+
+/**
+ * Layer 13 Multi-Object 3D Visualization interfaces
+ */
+
+export interface MultiPropagatedObjectState {
+  norad_cat_id: number
+  object_name: string
+  classification: string
+  classification_source: string
+  epoch?: string | null
+  epoch_age_days?: number | null
+  is_stale: boolean
+  position_x_km: number
+  position_y_km: number
+  position_z_km: number
+  velocity_x_km_s: number
+  velocity_y_km_s: number
+  velocity_z_km_s: number
+  altitude_km: number
+  speed_km_s: number
+  sgp4_error: number
+}
+
+export interface MultiPropagatedOrbitResponse {
+  timestamp: string
+  total_matching: number
+  propagated_count: number
+  objects: MultiPropagatedObjectState[]
+  data_source_notes: string[]
+  disclaimer: string
+}
