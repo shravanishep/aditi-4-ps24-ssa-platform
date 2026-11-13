@@ -1,0 +1,58 @@
+# ===========================================================================
+# ADITI 4.0 SSA Platform — Frontend Dockerfile
+# Multi-stage build: Node.js build + Nginx production server
+# ===========================================================================
+
+# Stage 1: Build static assets
+FROM node:20-alpine AS builder
+
+WORKDIR /app
+
+# Copy package descriptors for layer caching
+COPY frontend/package.json frontend/package-lock.json* ./
+RUN npm ci
+
+# Copy frontend source
+COPY frontend/ ./
+
+# Build optimized production bundle
+RUN npm run build
+
+# Stage 2: Serve via Nginx
+FROM nginx:alpine
+
+# Copy built artifacts from builder stage
+COPY --from=builder /app/dist /usr/share/nginx/html
+
+# Custom Nginx configuration: reverse proxy backend endpoints and SPA fallback
+RUN cat <<'EOF' > /etc/nginx/conf.d/default.conf
+server {
+    listen 80;
+    server_name localhost;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # Reverse proxy backend API calls
+    location ~ ^/(health|satellites|conjunction|threats|maneuver|events|cdm|pc|catalog|trajectory|docs|openapi.json) {
+        proxy_pass http://backend:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_read_timeout 120s;
+    }
+
+    # SPA routing fallback for React Router
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}
+EOF
+
+EXPOSE 80
+
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+  CMD wget -q -O - http://localhost/ || exit 1
+
+CMD ["nginx", "-g", "daemon off;"]
+

@@ -1,0 +1,43 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: aditi-backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+      - ./models:/app/models
+    environment:
+      - SPACE_TRACK_USERNAME=${SPACE_TRACK_USERNAME:-}
+      - SPACE_TRACK_PASSWORD=${SPACE_TRACK_PASSWORD:-}
+      - SSA_REFRESH_ENABLED=${SSA_REFRESH_ENABLED:-true}
+      - SSA_REFRESH_INTERVAL_HOURS=${SSA_REFRESH_INTERVAL_HOURS:-6.0}
+      - SSA_REFRESH_RUN_IMMEDIATELY=${SSA_REFRESH_RUN_IMMEDIATELY:-false}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: aditi-frontend
+    ports:
+      - "80:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+

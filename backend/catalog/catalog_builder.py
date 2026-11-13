@@ -147,7 +147,7 @@ def build_unified_catalog(
         if epoch_dt is None:
             freshness_status = "missing_epoch"
         elif config.max_epoch_age_days is not None and age_days is not None:
-            if age_days > config.max_epoch_age_days:
+            if abs(age_days) > config.max_epoch_age_days:
                 is_stale = True
                 freshness_status = "stale"
 

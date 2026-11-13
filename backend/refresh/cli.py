@@ -117,8 +117,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--interval-hours",
         type=float,
-        default=24.0,
-        help="Interval in hours for periodic scheduler (default: 24.0).",
+        default=6.0,
+        help="Interval in hours for periodic scheduler (default: 6.0).",
     )
     return parser
 

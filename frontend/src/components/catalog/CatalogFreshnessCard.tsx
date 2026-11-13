@@ -22,7 +22,7 @@ export default function CatalogFreshnessCard() {
   }, [])
 
   const formatIso = (iso: string | null | undefined) => {
-    if (!iso) return 'Not recorded'
+    if (!iso) return 'None'
     try {
       const dt = new Date(iso)
       return dt.toLocaleString(undefined, {
@@ -31,7 +31,6 @@ export default function CatalogFreshnessCard() {
         day: 'numeric',
         hour: '2-digit',
         minute: '2-digit',
-        second: '2-digit',
         timeZoneName: 'short',
       })
     } catch {
@@ -41,35 +40,50 @@ export default function CatalogFreshnessCard() {
 
   const getStatusBadge = () => {
     if (!data) return null
-    if (data.refresh_status === 'success') {
+
+    const isSchedulerActive = data.scheduler_status === 'active'
+
+    if (isSchedulerActive) {
+      if (data.refresh_status === 'success') {
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium bg-emerald-950/70 text-emerald-300 border border-emerald-700/60 font-mono">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+            Automatic refresh active · Last refresh successful
+          </span>
+        )
+      }
+      if (data.refresh_status === 'failed') {
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium bg-rose-950/70 text-rose-300 border border-rose-700/60 font-mono">
+            <span className="w-2 h-2 rounded-full bg-rose-400" />
+            Automatic refresh active · Last refresh failed (Preserving last-known-good snapshot)
+          </span>
+        )
+      }
+      if (data.refresh_status === 'partial') {
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium bg-amber-950/70 text-amber-300 border border-amber-700/60 font-mono">
+            <span className="w-2 h-2 rounded-full bg-amber-400" />
+            Automatic refresh active · Partial sync
+          </span>
+        )
+      }
       return (
-        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-900/60 text-emerald-300 border border-emerald-600/50">
-          Sync Status: Fresh
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium bg-sky-950/70 text-sky-300 border border-sky-700/60 font-mono">
+          <span className="w-2 h-2 rounded-full bg-sky-400" />
+          Automatic refresh active (Cycle: Every {data.refresh_interval_hours || 6}h)
         </span>
       )
     }
-    if (data.refresh_status === 'partial') {
-      return (
-        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-900/60 text-amber-300 border border-amber-600/50">
-          Sync Status: Partial
-        </span>
-      )
-    }
-    if (data.refresh_status === 'failed') {
-      return (
-        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-rose-900/60 text-rose-300 border border-rose-600/50">
-          Sync Status: Failed (Last Known Good Active)
-        </span>
-      )
-    }
+
     return (
-      <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-slate-700 text-slate-300 border border-slate-600">
-        Sync Status: Local Snapshot
+      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium bg-slate-800 text-slate-300 border border-slate-700 font-mono">
+        <span className="w-2 h-2 rounded-full bg-slate-500" />
+        Scheduler disabled · Local snapshot active
       </span>
     )
   }
 
-  // Calculate regime percentages for chart
   const regimes = data?.orbit_regimes || { LEO: 15269, MEO: 204, GEO: 563, Other: 11 }
   const totalInRegimes = Object.values(regimes).reduce((a, b) => a + b, 0) || 1
   const leoPct = ((regimes['LEO'] || 0) / totalInRegimes) * 100
@@ -79,9 +93,9 @@ export default function CatalogFreshnessCard() {
 
   return (
     <section className="mb-8" id="catalog-freshness-panel">
-      <div className="flex items-center justify-between mb-3">
-        <h2 className="text-xs font-semibold text-slate-500 uppercase tracking-widest">
-          Catalogue & Data Freshness
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
+        <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-widest">
+          Catalogue Provenance & Automatic Refresh
         </h2>
         {data && getStatusBadge()}
       </div>
@@ -97,96 +111,109 @@ export default function CatalogFreshnessCard() {
             <span>Catalogue status unavailable: {error}</span>
             <button
               onClick={loadStatus}
-              className="text-xs text-cyan-400 hover:text-cyan-300 underline font-medium"
+              className="text-xs text-sky-400 hover:text-sky-300 underline font-medium"
             >
               Retry
             </button>
           </div>
         ) : data ? (
           <div className="space-y-6">
-            {/* Metric row */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              <div className="bg-slate-900/60 border border-slate-700/60 rounded-md p-3">
-                <div className="text-xs text-slate-400 mb-1">Total Objects</div>
-                <div className="text-xl font-bold font-mono text-slate-100">
+            {/* 4 Distinct Operational Metric Cards */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              {/* Card 1: Catalogue Counts */}
+              <div className="bg-slate-900/60 border border-slate-700/60 rounded-md p-3.5 space-y-1">
+                <span className="text-xs text-slate-400 block">Total Objects</span>
+                <span className="text-xl font-bold font-mono text-slate-100 block">
                   {data.total_objects.toLocaleString()}
-                </div>
-                <div className="text-[11px] text-slate-500 mt-1">
-                  {data.with_orbital_data.toLocaleString()} with orbital elements
-                </div>
-              </div>
-
-              <div className="bg-slate-900/60 border border-slate-700/60 rounded-md p-3">
-                <div className="text-xs text-slate-400 mb-1">Active Satellites</div>
-                <div className="text-xl font-bold font-mono text-cyan-400">
-                  {data.active_satellites.toLocaleString()}
-                </div>
-                <div className="text-[11px] text-slate-500 mt-1">Operational orbital group</div>
-              </div>
-
-              <div className="bg-slate-900/60 border border-slate-700/60 rounded-md p-3">
-                <div className="text-xs text-slate-400 mb-1">Oldest Epoch Age</div>
-                <div className="text-xl font-bold font-mono text-amber-300">
-                  {data.max_epoch_age_days !== null ? `${data.max_epoch_age_days}d` : 'N/A'}
-                </div>
-                <div className="text-[11px] text-slate-500 mt-1">
-                  {data.max_epoch_age_days && data.max_epoch_age_days > 14
-                    ? 'Advisory accuracy'
-                    : 'Current epoch'}
+                </span>
+                <div className="text-[11px] text-slate-400 space-y-0.5 pt-1">
+                  <div>Active payloads: <span className="font-mono text-sky-400 font-semibold">{data.active_satellites.toLocaleString()}</span></div>
+                  <div>With orbital data: <span className="font-mono text-slate-300">{data.with_orbital_data.toLocaleString()}</span></div>
                 </div>
               </div>
 
-              <div className="bg-slate-900/60 border border-slate-700/60 rounded-md p-3">
-                <div className="text-xs text-slate-400 mb-1">Last Sync Check</div>
-                <div className="text-sm font-medium text-slate-200 truncate">
-                  {data.last_successful_refresh ? formatIso(data.last_successful_refresh) : 'Static File'}
+              {/* Card 2: Epoch Age Statistics */}
+              <div className="bg-slate-900/60 border border-slate-700/60 rounded-md p-3.5 space-y-1">
+                <span className="text-xs text-slate-400 block">Median Epoch Age</span>
+                <span className="text-xl font-bold font-mono text-amber-300 block">
+                  {data.median_epoch_age_days !== null && data.median_epoch_age_days !== undefined
+                    ? `${data.median_epoch_age_days}d`
+                    : 'N/A'}
+                </span>
+                <div className="text-[11px] text-slate-400 space-y-0.5 pt-1">
+                  <div>Oldest epoch age: <span className="font-mono text-slate-300">{data.max_epoch_age_days ?? 'N/A'}d</span></div>
+                  <div>Stale objects (&gt;30d): <span className="font-mono text-amber-300 font-semibold">{data.stale_objects.toLocaleString()}</span></div>
                 </div>
-                <div className="text-[11px] text-slate-500 mt-1">
-                  {data.last_refresh_attempt ? `Attempted: ${formatIso(data.last_refresh_attempt)}` : 'Manual ingest'}
+              </div>
+
+              {/* Card 3: Retrieval Timestamps (Download Time != Epoch) */}
+              <div className="bg-slate-900/60 border border-slate-700/60 rounded-md p-3.5 space-y-1">
+                <span className="text-xs text-slate-400 block">Last Successful Retrieval</span>
+                <span className="text-sm font-semibold font-mono text-slate-200 block truncate">
+                  {data.last_successful_refresh ? formatIso(data.last_successful_refresh) : 'Pre-loaded Snapshot'}
+                </span>
+                <div className="text-[11px] text-slate-400 space-y-0.5 pt-1">
+                  <div className="truncate">Last attempt: <span className="font-mono text-slate-300">{formatIso(data.last_refresh_attempt)}</span></div>
+                  <div>Outcome: <span className="font-mono uppercase text-slate-300">{data.refresh_status}</span></div>
+                </div>
+              </div>
+
+              {/* Card 4: Scheduler Lifecycle */}
+              <div className="bg-slate-900/60 border border-slate-700/60 rounded-md p-3.5 space-y-1">
+                <span className="text-xs text-slate-400 block">Scheduler Lifecycle</span>
+                <div className="flex items-center gap-2 mt-0.5">
+                  <span className={`w-2 h-2 rounded-full ${data.scheduler_status === 'active' ? 'bg-emerald-400' : 'bg-slate-500'}`} />
+                  <span className="text-sm font-bold font-mono text-slate-100 uppercase">
+                    {data.scheduler_status || 'disabled'}
+                  </span>
+                </div>
+                <div className="text-[11px] text-slate-400 space-y-0.5 pt-1">
+                  <div>Cadence: <span className="font-mono text-slate-300">Every {data.refresh_interval_hours || 6.0}h</span></div>
+                  <div>Source: <span className="font-mono text-slate-300 truncate">CelesTrak GP (CSV)</span></div>
                 </div>
               </div>
             </div>
 
             {/* Orbit Regimes & Altitude Distribution Chart */}
-            <div className="bg-slate-900/80 border border-slate-700/70 rounded-lg p-4 space-y-3">
+            <div className="bg-slate-900/70 border border-slate-700/70 rounded-lg p-4 space-y-3">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
                 <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-300">
                   Orbital Altitude & Regime Distribution
                 </h3>
                 <span className="text-[11px] text-slate-400 font-mono">
-                  {data.total_objects.toLocaleString()} Objects In Catalogue
+                  {data.total_objects.toLocaleString()} Ingested Objects
                 </span>
               </div>
 
               {/* Stacked Distribution Bar */}
-              <div className="w-full h-4 bg-slate-800 rounded-full overflow-hidden flex border border-slate-700">
+              <div className="w-full h-3 bg-slate-800 rounded-full overflow-hidden flex border border-slate-700">
                 <div
-                  className="bg-cyan-500 transition-all duration-500"
+                  className="bg-sky-500 transition-all duration-500"
                   style={{ width: `${leoPct}%` }}
                   title={`LEO: ${regimes['LEO']?.toLocaleString()} (${leoPct.toFixed(1)}%)`}
                 />
                 <div
-                  className="bg-blue-500 transition-all duration-500"
+                  className="bg-blue-600 transition-all duration-500"
                   style={{ width: `${meoPct}%` }}
                   title={`MEO: ${regimes['MEO']?.toLocaleString()} (${meoPct.toFixed(1)}%)`}
                 />
                 <div
-                  className="bg-emerald-500 transition-all duration-500"
+                  className="bg-emerald-600 transition-all duration-500"
                   style={{ width: `${geoPct}%` }}
                   title={`GEO: ${regimes['GEO']?.toLocaleString()} (${geoPct.toFixed(1)}%)`}
                 />
                 <div
-                  className="bg-purple-500 transition-all duration-500"
+                  className="bg-purple-600 transition-all duration-500"
                   style={{ width: `${otherPct}%` }}
                   title={`Other/HEO: ${regimes['Other']?.toLocaleString()} (${otherPct.toFixed(1)}%)`}
                 />
               </div>
 
               {/* Regime Legend Cards */}
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1 text-xs">
-                <div className="bg-slate-800/80 rounded p-2 border border-slate-700/60">
-                  <div className="flex items-center gap-1.5 text-cyan-400 font-medium">
-                    <span className="w-2 h-2 rounded-full bg-cyan-400" />
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 pt-1 text-xs">
+                <div className="bg-slate-800/80 rounded p-2.5 border border-slate-700/60">
+                  <div className="flex items-center gap-1.5 text-sky-400 font-medium">
+                    <span className="w-2 h-2 rounded-full bg-sky-400" />
                     <span>LEO (&lt;2,000 km)</span>
                   </div>
                   <div className="text-sm font-bold font-mono text-slate-100 mt-1">
@@ -195,10 +222,10 @@ export default function CatalogFreshnessCard() {
                   <span className="text-[10px] text-slate-400">{leoPct.toFixed(1)}% of catalogue</span>
                 </div>
 
-                <div className="bg-slate-800/80 rounded p-2 border border-slate-700/60">
+                <div className="bg-slate-800/80 rounded p-2.5 border border-slate-700/60">
                   <div className="flex items-center gap-1.5 text-blue-400 font-medium">
-                    <span className="w-2 h-2 rounded-full bg-blue-400" />
-                    <span>MEO (2,000–35k km)</span>
+                    <span className="w-2 h-2 rounded-full bg-blue-500" />
+                    <span>MEO (2k–35k km)</span>
                   </div>
                   <div className="text-sm font-bold font-mono text-slate-100 mt-1">
                     {regimes['MEO']?.toLocaleString()}
@@ -206,9 +233,9 @@ export default function CatalogFreshnessCard() {
                   <span className="text-[10px] text-slate-400">{meoPct.toFixed(1)}% of catalogue</span>
                 </div>
 
-                <div className="bg-slate-800/80 rounded p-2 border border-slate-700/60">
+                <div className="bg-slate-800/80 rounded p-2.5 border border-slate-700/60">
                   <div className="flex items-center gap-1.5 text-emerald-400 font-medium">
-                    <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                    <span className="w-2 h-2 rounded-full bg-emerald-500" />
                     <span>GEO (~35,786 km)</span>
                   </div>
                   <div className="text-sm font-bold font-mono text-slate-100 mt-1">
@@ -217,9 +244,9 @@ export default function CatalogFreshnessCard() {
                   <span className="text-[10px] text-slate-400">{geoPct.toFixed(1)}% of catalogue</span>
                 </div>
 
-                <div className="bg-slate-800/80 rounded p-2 border border-slate-700/60">
+                <div className="bg-slate-800/80 rounded p-2.5 border border-slate-700/60">
                   <div className="flex items-center gap-1.5 text-purple-400 font-medium">
-                    <span className="w-2 h-2 rounded-full bg-purple-400" />
+                    <span className="w-2 h-2 rounded-full bg-purple-500" />
                     <span>HEO / Deep Space</span>
                   </div>
                   <div className="text-sm font-bold font-mono text-slate-100 mt-1">
@@ -230,68 +257,15 @@ export default function CatalogFreshnessCard() {
               </div>
             </div>
 
-            {/* Object Classification Provenance & Coverage Box */}
-            <div className="bg-slate-900/60 border border-slate-700/60 rounded-md p-3.5 space-y-2 text-xs">
-              <div className="flex items-center justify-between">
-                <span className="font-semibold text-slate-300">Catalogue Classification Coverage</span>
-                <span className="text-[10px] text-slate-400">SATCAT Metadata Notice</span>
+            {/* Scientific Notice: Difference between download time and epoch */}
+            <div className="bg-amber-950/20 border border-amber-800/50 rounded-md p-3.5 space-y-1 text-xs">
+              <div className="font-semibold text-amber-300 flex items-center gap-1.5">
+                <span>⚠️</span>
+                <span>Scientific Provenance: Retrieval Time vs. Orbital Generation Epoch</span>
               </div>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-slate-300 text-xs">
-                <div className="bg-slate-800/60 p-2 rounded border border-slate-700/50">
-                  <span className="text-[10px] text-slate-400 block">Active Satellites</span>
-                  <span className="font-mono font-bold text-cyan-400">{data.active_satellites.toLocaleString()}</span>
-                  <span className="text-[10px] text-emerald-400 block mt-0.5">✓ Loaded</span>
-                </div>
-                <div className="bg-slate-800/60 p-2 rounded border border-slate-700/50">
-                  <span className="text-[10px] text-slate-400 block">Inactive Payloads</span>
-                  <span className="font-mono font-bold text-slate-400">0</span>
-                  <span className="text-[10px] text-slate-500 block mt-0.5">Requires SATCAT</span>
-                </div>
-                <div className="bg-slate-800/60 p-2 rounded border border-slate-700/50">
-                  <span className="text-[10px] text-slate-400 block">Rocket Bodies</span>
-                  <span className="font-mono font-bold text-slate-400">0</span>
-                  <span className="text-[10px] text-slate-500 block mt-0.5">Requires SATCAT</span>
-                </div>
-                <div className="bg-slate-800/60 p-2 rounded border border-slate-700/50">
-                  <span className="text-[10px] text-slate-400 block">Debris Fragments</span>
-                  <span className="font-mono font-bold text-slate-400">0</span>
-                  <span className="text-[10px] text-slate-500 block mt-0.5">Requires Debris GP</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Warnings list */}
-            {data.warnings && data.warnings.length > 0 && (
-              <div className="bg-amber-950/30 border border-amber-800/50 rounded-md p-3 space-y-1">
-                <div className="text-xs font-semibold text-amber-400 flex items-center gap-1.5">
-                  <svg className="w-3.5 h-3.5 shrink-0" fill="currentColor" viewBox="0 0 20 20">
-                    <path
-                      fillRule="evenodd"
-                      d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z"
-                      clipRule="evenodd"
-                    />
-                  </svg>
-                  Data Freshness & Epoch Notice
-                </div>
-                {data.warnings.map((w, idx) => (
-                  <p key={idx} className="text-xs text-amber-300/90 pl-5">
-                    • {w}
-                  </p>
-                ))}
-              </div>
-            )}
-
-            {/* Footer provenance note */}
-            <div className="text-[11px] text-slate-500 pt-1 flex items-center justify-between border-t border-slate-700/50">
-              <span>
-                Source: CelesTrak GP Dataset · Download time does NOT equal orbital generation epoch.
-              </span>
-              <button
-                onClick={loadStatus}
-                className="text-cyan-400 hover:text-cyan-300 text-xs font-medium inline-flex items-center gap-1 transition-colors"
-              >
-                ↻ Refresh Status
-              </button>
+              <p className="text-slate-300 leading-relaxed text-[11px]">
+                The retrieval timestamp reflects when the CSV dataset was pulled from CelesTrak. It does <strong>NOT</strong> equal the orbital generation epoch. Epoch timestamps range from {data.newest_epoch ? formatIso(data.newest_epoch) : 'N/A'} (newest) to {data.oldest_epoch ? formatIso(data.oldest_epoch) : 'N/A'} (oldest). Analytical SGP4 propagation degrades as epoch age increases; all predictions are research prototypes.
+              </p>
             </div>
           </div>
         ) : null}

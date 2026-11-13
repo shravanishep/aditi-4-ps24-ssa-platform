@@ -11,6 +11,7 @@ No orbital propagation, distance, or conjunction logic lives here.
 from __future__ import annotations
 
 import math
+import statistics
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Annotated
@@ -27,18 +28,30 @@ from backend.catalog import (
 )
 from backend.orbital.conjunction import find_closest_approach
 from backend.orbital.gp_loader import get_satellite_by_norad, load_gp_data
+from backend.orbital.maneuver_simulator import simulate_maneuver
+from backend.orbital.cdm_parser import parse_cdm, validate_covariance_psd
+from backend.orbital.collision_probability import compute_pc_foster_2d
 from backend.orbital.sgp4_propagator import propagate_orbit
 from ml.models.threat_config import ThreatConfig
 from ml.models.threat_prioritization import screen_threats_from_catalog
 
 from backend.refresh.metadata import RefreshMetadata
+from backend.refresh.scheduler import get_global_scheduler, get_scheduler_status
 
 from .schemas import (
+    CDMParseRequest,
+    CDMParseResponse,
     CatalogStatusResponse,
     CloseApproachResultResponse,
     ConjunctionAnalysisRequest,
+    ManeuverSimulationRequest,
+    ManeuverSimulationResponse,
     MultiPropagatedObjectState,
     MultiPropagatedOrbitResponse,
+    PcComputeRequest,
+    PcComputeResponse,
+    PcFromCDMRequest,
+    PcFromCDMResponse,
     PropagatedOrbitStateResponse,
     SatelliteBasicInfo,
     SatelliteGPInfo,
@@ -47,6 +60,7 @@ from .schemas import (
     ThreatScreeningRequest,
     ThreatScreeningResponse,
     ThreatScreeningSummary,
+    TrajectoryPoint3D,
     TrajectoryPointResponse,
     TrajectoryResponse,
 )
@@ -858,11 +872,13 @@ def get_catalog_status() -> CatalogStatusResponse:
     epochs = [o.epoch for o in catalog if o.epoch is not None]
     oldest_epoch_str = min(epochs).isoformat() if epochs else None
     newest_epoch_str = max(epochs).isoformat() if epochs else None
-    max_epoch_age_days = (
-        round(max((now - e).total_seconds() / 86400.0 for e in epochs), 2)
-        if epochs
-        else None
-    )
+    epoch_ages = [(now - e).total_seconds() / 86400.0 for e in epochs]
+    max_epoch_age_days = round(max(epoch_ages), 2) if epoch_ages else None
+    median_epoch_age_days = round(statistics.median(epoch_ages), 2) if epoch_ages else None
+
+    sched_status = get_scheduler_status()
+    sched = get_global_scheduler()
+    interval_hours = round(sched.interval_seconds / 3600.0, 1) if sched else 6.0
 
     sources_map: dict[str, SourceFreshnessResponse] = {}
     if refresh_meta.sources:
@@ -946,6 +962,9 @@ def get_catalog_status() -> CatalogStatusResponse:
         last_refresh_attempt=refresh_meta.last_refresh_attempt,
         last_successful_refresh=refresh_meta.last_successful_refresh,
         refresh_status=refresh_meta.status,
+        last_refresh_result=refresh_meta.status,
+        scheduler_status=sched_status,
+        refresh_interval_hours=interval_hours,
         total_objects=total_objects,
         active_satellites=active_satellites,
         with_orbital_data=with_orbital,
@@ -953,6 +972,7 @@ def get_catalog_status() -> CatalogStatusResponse:
         oldest_epoch=oldest_epoch_str,
         newest_epoch=newest_epoch_str,
         max_epoch_age_days=max_epoch_age_days,
+        median_epoch_age_days=median_epoch_age_days,
         sources=sources_map,
         warnings=warnings,
         data_source_notes=data_notes,
@@ -963,3 +983,262 @@ def get_catalog_status() -> CatalogStatusResponse:
         orbit_regimes=regimes,
         classifications=classifications_map,
     )
+
+
+# ---------------------------------------------------------------------------
+# Feature 1 — Collision Avoidance Maneuver (CAM) Simulation
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/maneuver/simulate",
+    response_model=ManeuverSimulationResponse,
+    tags=["maneuver"],
+)
+def simulate_maneuver_endpoint(body: ManeuverSimulationRequest) -> ManeuverSimulationResponse:
+    """Simulate an impulsive ΔV CAM and return before/after conjunction comparison.
+
+    Post-maneuver propagation uses numerical two-body+J2 (RK4) integration,
+    NOT SGP4.  Results are advisory for research purposes only.
+    """
+    # Load satellite rows — 404 if not found
+    try:
+        row1 = get_satellite_by_norad(body.norad1, _GP_CSV)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=f"Protected satellite not found: {exc}") from exc
+
+    try:
+        row2 = get_satellite_by_norad(body.norad2, _GP_CSV)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=f"Threat satellite not found: {exc}") from exc
+
+    # Parse maneuver time — 422 for bad format
+    try:
+        maneuver_dt = datetime.fromisoformat(
+            body.maneuver_time.replace("Z", "+00:00").replace(" ", "+")
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid maneuver_time format '{body.maneuver_time}': {exc}",
+        ) from exc
+
+    if maneuver_dt.tzinfo is None:
+        maneuver_dt = maneuver_dt.replace(tzinfo=timezone.utc)
+    maneuver_dt = maneuver_dt.astimezone(timezone.utc)
+
+    # Run simulation — 400 for maneuver validation errors (excessive ΔV, SGP4 failure, etc.)
+    try:
+        result = simulate_maneuver(
+            sat_row=row1,
+            other_sat_row=row2,
+            maneuver_time_utc=maneuver_dt,
+            dv_x=body.dv_x_km_s,
+            dv_y=body.dv_y_km_s,
+            dv_z=body.dv_z_km_s,
+            window_hours=body.window_hours,
+            step_sec=body.step_sec,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    # Convert trajectory points
+    def _to_tp3d(pts: list[dict]) -> list[TrajectoryPoint3D]:
+        out = []
+        for pt in pts:
+            import math as _m
+            x = pt["x"]
+            if _m.isnan(x):
+                continue  # skip broken integration steps
+            out.append(TrajectoryPoint3D(
+                timestamp=pt["t"],
+                x_km=pt["x"],
+                y_km=pt["y"],
+                z_km=pt["z"],
+            ))
+        return out
+
+    return ManeuverSimulationResponse(
+        original_tca=result.original_tca.isoformat(),
+        original_miss_km=result.original_miss_km,
+        original_rel_speed_km_s=result.original_rel_speed,
+        modified_tca=result.modified_tca.isoformat(),
+        modified_miss_km=result.modified_miss_km,
+        modified_rel_speed_km_s=result.modified_rel_speed,
+        dv_magnitude_km_s=result.dv_magnitude_km_s,
+        improvement_km=result.improvement_km,
+        maneuver_time=result.maneuver_time.isoformat(),
+        original_trajectory=_to_tp3d(result.original_trajectory),
+        modified_trajectory=_to_tp3d(result.modified_trajectory),
+        disclaimer=result.disclaimer,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Feature 3 — Collision Probability (Pc) & CDM Endpoints
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/cdm/parse",
+    response_model=CDMParseResponse,
+    tags=["cdm"],
+)
+def parse_cdm_endpoint(body: CDMParseRequest) -> CDMParseResponse:
+    """Parse a Conjunction Data Message (CDM) text and inspect covariance data."""
+    try:
+        record = parse_cdm(body.cdm_text)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    cov_avail = record.object1.covariance_matrix is not None
+    cov_valid = False
+    notes: list[str] = []
+
+    if cov_avail:
+        try:
+            cov_valid = validate_covariance_psd(record.object1.covariance_matrix)  # type: ignore
+            if cov_valid:
+                notes.append(f"Covariance matrix is valid positive semi-definite ({record.object1.covariance_frame} frame).")
+            else:
+                notes.append("Covariance matrix is not positive semi-definite.")
+        except Exception as exc:
+            notes.append(f"Covariance validation error: {exc}")
+    else:
+        notes.append("No position covariance block present in CDM.")
+
+    return CDMParseResponse(
+        tca=record.tca.isoformat(),
+        relative_position_r_km=record.relative_position_r_km,
+        relative_position_t_km=record.relative_position_t_km,
+        relative_position_n_km=record.relative_position_n_km,
+        relative_speed_km_s=record.relative_speed_km_s,
+        object1_name=record.object1.object_name,
+        object2_name=record.object2.object_name,
+        covariance_available=cov_avail,
+        covariance_valid=cov_valid,
+        parse_notes=notes,
+    )
+
+
+@router.post(
+    "/pc/compute",
+    response_model=PcComputeResponse,
+    tags=["collision_probability"],
+)
+def compute_pc_endpoint(body: PcComputeRequest) -> PcComputeResponse:
+    """Calculate Foster 2-D collision probability from miss distance, speed, and covariance."""
+    try:
+        res = compute_pc_foster_2d(
+            miss_distance_km=body.miss_distance_km,
+            relative_speed_km_s=body.rel_speed_km_s,
+            cov1_rtn_3x3=body.cov1_rtn,
+            cov2_rtn_3x3=body.cov2_rtn,
+            hard_body_radius_km=body.hard_body_radius_km,
+            rel_r_km=body.rel_r_km,
+            rel_n_km=body.rel_n_km,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return PcComputeResponse(
+        pc=res.pc,
+        pc_method=res.pc_method,
+        hard_body_radius_km=res.hard_body_radius_km,
+        combined_covariance_valid=res.combined_covariance_valid,
+        miss_distance_km=res.miss_distance_km,
+        relative_speed_km_s=res.relative_speed_km_s,
+        b_plane_sigma1_km=res.b_plane_sigma1_km,
+        b_plane_sigma2_km=res.b_plane_sigma2_km,
+        computation_notes=res.computation_notes,
+        disclaimer=res.disclaimer,
+    )
+
+
+@router.post(
+    "/pc/from-cdm",
+    response_model=PcFromCDMResponse,
+    tags=["collision_probability"],
+)
+def compute_pc_from_cdm_endpoint(body: PcFromCDMRequest) -> PcFromCDMResponse:
+    """Parse a CDM and compute Foster 2-D collision probability in a single request."""
+    try:
+        record = parse_cdm(body.cdm_text)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"CDM parse error: {exc}") from exc
+
+    miss_dist = math.sqrt(
+        record.relative_position_r_km**2
+        + record.relative_position_t_km**2
+        + record.relative_position_n_km**2
+    )
+    if miss_dist <= 0:
+        miss_dist = 0.001  # avoid division by zero if exact overlap
+
+    # Object 1 carries the combined or primary covariance
+    cov1 = record.object1.covariance_matrix
+    cov2 = record.object2.covariance_matrix
+
+    cdm_notes = [
+        f"Parsed CDM for TCA {record.tca.isoformat()}.",
+        f"Encounter objects: {record.object1.object_name} vs {record.object2.object_name}.",
+    ]
+
+    res = compute_pc_foster_2d(
+        miss_distance_km=miss_dist,
+        relative_speed_km_s=record.relative_speed_km_s,
+        cov1_rtn_3x3=cov1,
+        cov2_rtn_3x3=cov2,
+        hard_body_radius_km=body.hard_body_radius_km,
+        rel_r_km=record.relative_position_r_km,
+        rel_n_km=record.relative_position_n_km,
+    )
+
+    pc_resp = PcComputeResponse(
+        pc=res.pc,
+        pc_method=res.pc_method,
+        hard_body_radius_km=res.hard_body_radius_km,
+        combined_covariance_valid=res.combined_covariance_valid,
+        miss_distance_km=res.miss_distance_km,
+        relative_speed_km_s=res.relative_speed_km_s,
+        b_plane_sigma1_km=res.b_plane_sigma1_km,
+        b_plane_sigma2_km=res.b_plane_sigma2_km,
+        computation_notes=res.computation_notes,
+        disclaimer=res.disclaimer,
+    )
+
+    return PcFromCDMResponse(
+        tca=record.tca.isoformat(),
+        miss_distance_km=round(miss_dist, 6),
+        relative_speed_km_s=record.relative_speed_km_s,
+        pc_result=pc_resp,
+        cdm_parse_notes=cdm_notes,
+    )
+
+
+@router.get(
+    "/pc/method-info",
+    tags=["collision_probability"],
+)
+def get_pc_method_info() -> dict:
+    """Return scientific documentation and assumptions for the Foster 2-D method."""
+    return {
+        "method": "Foster 1992 Encounter-Plane 2-D Method",
+        "description": (
+            "Integrates a 2-D Gaussian probability density function over a circular disk "
+            "of radius equal to the combined hard-body radius in the encounter plane (B-plane)."
+        ),
+        "assumptions": [
+            "Linear relative motion during the encounter window (duration << orbital period).",
+            "Zero-mean stationary 3-D Gaussian positional uncertainty characterized by covariance.",
+            "Spherical hard-body geometry with combined collision cross-section radius.",
+            "Encounter plane is perpendicular to the relative velocity vector at TCA.",
+        ],
+        "covariance_requirement": (
+            "A scalar miss distance is NOT sufficient. Valid positive semi-definite 3x3 covariance "
+            "matrices in the RTN frame are strictly required. Missing covariance yields pc=null."
+        ),
+        "disclaimer": (
+            "Research prototype for education and simulation. NOT certified for operational "
+            "satellite collision avoidance maneuvers."
+        ),
+    }
+

@@ -164,10 +164,18 @@ export default function GlobePage() {
         style={{ maxHeight: '100vh' }}
       >
         <div>
-          <h1 className="text-xl font-bold text-slate-100">3D Orbital Visualization</h1>
+          <h1 className="text-xl font-bold text-slate-100 flex items-center gap-2">
+            <span className="text-sky-400 font-mono text-lg">🌐</span> 3D Orbital Visualization
+          </h1>
           <p className="text-xs text-slate-400 mt-1">
-            Real-time analytical SGP4 orbital propagation rendered on CesiumJS globe.
+            Analytical SGP4 orbital snapshot rendered on CesiumJS globe.
           </p>
+        </div>
+
+        {/* Orbit geometry education note */}
+        <div className="bg-slate-800/60 border border-slate-700/70 rounded p-2.5 text-[11px] text-slate-400 leading-relaxed">
+          <span className="text-sky-400 font-medium">Trajectory Note: </span>
+          Crossing orbit tracks in 3D space represent continuous paths over an orbital period and do <strong className="text-slate-300">not</strong> indicate an instantaneous collision (satellites occupy positions at different altitudes and times).
         </div>
 
         {/* View Mode Toggle */}
@@ -177,7 +185,7 @@ export default function GlobePage() {
             onClick={() => setViewMode('catalog')}
             className={`flex-1 py-1.5 rounded-md transition-colors ${
               viewMode === 'catalog'
-                ? 'bg-cyan-700 text-white shadow'
+                ? 'bg-sky-600 text-white shadow'
                 : 'text-slate-400 hover:text-slate-200'
             }`}
           >
@@ -188,7 +196,7 @@ export default function GlobePage() {
             onClick={() => setViewMode('single')}
             className={`flex-1 py-1.5 rounded-md transition-colors ${
               viewMode === 'single'
-                ? 'bg-cyan-700 text-white shadow'
+                ? 'bg-sky-600 text-white shadow'
                 : 'text-slate-400 hover:text-slate-200'
             }`}
           >

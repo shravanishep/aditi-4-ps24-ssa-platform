@@ -33,7 +33,7 @@ class RefreshConfig:
 
     sources: list[RefreshSourceConfig] = field(default_factory=list)
     metadata_path: Path | str = "data/catalog_refresh_metadata.json"
-    http_timeout_seconds: float = 15.0
+    http_timeout_seconds: float = 30.0
     max_retries: int = 3
     backoff_factor: float = 1.0
     max_epoch_age_days: float = 30.0
@@ -70,7 +70,7 @@ class RefreshConfig:
                 ),
             ],
             metadata_path=root / "data" / "catalog_refresh_metadata.json",
-            http_timeout_seconds=15.0,
+            http_timeout_seconds=30.0,
             max_retries=3,
             backoff_factor=1.0,
             max_epoch_age_days=30.0,

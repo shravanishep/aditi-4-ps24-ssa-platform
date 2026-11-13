@@ -8,3 +8,5 @@ httpx
 pyarrow
 scikit-learn
 joblib
+requests
+scipy

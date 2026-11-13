@@ -299,6 +299,9 @@ class CatalogStatusResponse(BaseModel):
     last_refresh_attempt: Optional[str] = None
     last_successful_refresh: Optional[str] = None
     refresh_status: str  # "success", "failed", "partial", "unrefreshed"
+    last_refresh_result: Optional[str] = None
+    scheduler_status: str = "disabled"  # "active", "disabled"
+    refresh_interval_hours: Optional[float] = 6.0
     total_objects: int
     active_satellites: int
     with_orbital_data: int
@@ -306,6 +309,7 @@ class CatalogStatusResponse(BaseModel):
     oldest_epoch: Optional[str] = None
     newest_epoch: Optional[str] = None
     max_epoch_age_days: Optional[float] = None
+    median_epoch_age_days: Optional[float] = None
     sources: dict[str, SourceFreshnessResponse]
     warnings: list[str]
     data_source_notes: list[str]
@@ -350,3 +354,130 @@ class MultiPropagatedOrbitResponse(BaseModel):
     objects: list[MultiPropagatedObjectState]
     data_source_notes: list[str]
     disclaimer: str
+
+
+# ---------------------------------------------------------------------------
+# Feature 1 — Collision Avoidance Maneuver (CAM) Simulation schemas
+# ---------------------------------------------------------------------------
+
+class ManeuverSimulationRequest(BaseModel):
+    """Request body for the maneuver simulation endpoint."""
+
+    norad1: int = Field(..., description="NORAD catalog ID of the protected satellite.")
+    norad2: int = Field(..., description="NORAD catalog ID of the threat/other object.")
+    maneuver_time: str = Field(..., description="ISO-8601 UTC datetime for the impulsive burn.")
+    dv_x_km_s: float = Field(default=0.0, description="ΔV x-component [km/s] in TEME.")
+    dv_y_km_s: float = Field(default=0.0, description="ΔV y-component [km/s] in TEME.")
+    dv_z_km_s: float = Field(default=0.0, description="ΔV z-component [km/s] in TEME.")
+    window_hours: float = Field(
+        default=24.0, ge=1.0, le=72.0,
+        description="Propagation window in hours after the maneuver [1, 72].",
+    )
+    step_sec: float = Field(
+        default=60.0, ge=10.0, le=300.0,
+        description="RK4/SGP4 sampling step in seconds [10, 300].",
+    )
+
+
+class TrajectoryPoint3D(BaseModel):
+    """One 3-D position point along a propagated trajectory."""
+
+    timestamp: str
+    x_km: float
+    y_km: float
+    z_km: float
+
+
+class ManeuverSimulationResponse(BaseModel):
+    """Before/after comparison result for a CAM simulation."""
+
+    original_tca: str
+    original_miss_km: float
+    original_rel_speed_km_s: float
+    modified_tca: str
+    modified_miss_km: float
+    modified_rel_speed_km_s: float
+    dv_magnitude_km_s: float
+    improvement_km: float
+    maneuver_time: str
+    original_trajectory: list[TrajectoryPoint3D]
+    modified_trajectory: list[TrajectoryPoint3D]
+    disclaimer: str
+
+
+# ---------------------------------------------------------------------------
+# Feature 3 — Collision Probability (Pc) & CDM schemas
+# ---------------------------------------------------------------------------
+
+class CDMParseRequest(BaseModel):
+    """Raw text content of a CCSDS-compatible Conjunction Data Message (CDM)."""
+
+    cdm_text: str = Field(..., description="ASCII text of the CDM file.")
+
+
+class CDMParseResponse(BaseModel):
+    """Structured fields parsed from a Conjunction Data Message."""
+
+    tca: str
+    relative_position_r_km: float
+    relative_position_t_km: float
+    relative_position_n_km: float
+    relative_speed_km_s: float
+    object1_name: str
+    object2_name: str
+    covariance_available: bool
+    covariance_valid: bool
+    parse_notes: list[str]
+
+
+class PcComputeRequest(BaseModel):
+    """Parameters for Foster 2-D collision probability evaluation."""
+
+    miss_distance_km: float = Field(..., gt=0, description="Scalar miss distance at TCA [km].")
+    rel_speed_km_s: float = Field(..., gt=0, description="Relative speed at TCA [km/s].")
+    cov1_rtn: Optional[list[list[float]]] = Field(
+        None, description="Object 1 3x3 position covariance in RTN frame [km²]."
+    )
+    cov2_rtn: Optional[list[list[float]]] = Field(
+        None, description="Object 2 3x3 position covariance in RTN frame [km²]."
+    )
+    hard_body_radius_km: float = Field(
+        default=0.020, gt=0, le=1.0, description="Combined hard-body radius [km] (default 20 m)."
+    )
+    rel_r_km: float = Field(default=0.0, description="Radial relative position component [km].")
+    rel_n_km: float = Field(default=0.0, description="Normal relative position component [km].")
+
+
+class PcComputeResponse(BaseModel):
+    """Collision probability result using Foster's 2-D method."""
+
+    pc: Optional[float] = Field(None, description="Collision probability in [0, 1] or None if unavailable.")
+    pc_method: str
+    hard_body_radius_km: float
+    combined_covariance_valid: bool
+    miss_distance_km: float
+    relative_speed_km_s: float
+    b_plane_sigma1_km: Optional[float] = None
+    b_plane_sigma2_km: Optional[float] = None
+    computation_notes: list[str]
+    disclaimer: str
+
+
+class PcFromCDMRequest(BaseModel):
+    """Direct end-to-end request: parse CDM and calculate Pc."""
+
+    cdm_text: str = Field(..., description="Raw CDM text content.")
+    hard_body_radius_km: float = Field(
+        default=0.020, gt=0, le=1.0, description="Combined hard-body radius [km]."
+    )
+
+
+class PcFromCDMResponse(BaseModel):
+    """Result of parsing a CDM and evaluating Foster 2-D collision probability."""
+
+    tca: str
+    miss_distance_km: float
+    relative_speed_km_s: float
+    pc_result: PcComputeResponse
+    cdm_parse_notes: list[str]
+

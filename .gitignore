@@ -44,3 +44,8 @@ models/*.json
 
 # Logs
 *.log
+
+# Runtime SQLite databases
+*.db
+data/*.db
+

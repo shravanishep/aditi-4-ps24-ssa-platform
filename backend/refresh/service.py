@@ -51,6 +51,28 @@ class DataRefreshService:
         self.http_client = http_client
         self.on_refresh_success = on_refresh_success
 
+    MIN_COOLDOWN_SECONDS: float = 7200.0  # 2 hours per CelesTrak usage policy
+
+    def can_refresh(self, metadata_path: Path | str | None = None) -> tuple[bool, float]:
+        """Check if at least 2 hours have elapsed since the last successful refresh.
+
+        Returns
+        -------
+        tuple[bool, float]
+            (can_refresh, elapsed_seconds_since_last_success)
+        """
+        path = metadata_path or self.config.get_metadata_path()
+        existing = RefreshMetadata.load(path)
+        if not existing.last_successful_refresh:
+            return True, float("inf")
+        try:
+            last_dt = datetime.fromisoformat(existing.last_successful_refresh.replace("Z", "+00:00"))
+            now = datetime.now(timezone.utc)
+            elapsed = (now - last_dt).total_seconds()
+            return elapsed >= self.MIN_COOLDOWN_SECONDS, elapsed
+        except Exception:
+            return True, float("inf")
+
     def _fetch_with_retries(self, url: str, timeout: float) -> tuple[int, str]:
         """Fetch remote URL with configured retries and exponential backoff.
 
@@ -61,13 +83,16 @@ class DataRefreshService:
         """
         max_retries = max(1, self.config.max_retries)
         last_exc: Exception | None = None
+        headers = {
+            "User-Agent": "ADITI-SSA-Platform/0.5.0 (Space Situational Awareness Platform; https://celestrak.org usage compliant)"
+        }
 
         for attempt in range(max_retries):
             try:
                 if self.http_client is not None:
-                    resp = self.http_client.get(url, timeout=timeout)
+                    resp = self.http_client.get(url, headers=headers, timeout=timeout)
                 else:
-                    resp = requests.get(url, timeout=timeout)
+                    resp = requests.get(url, headers=headers, timeout=timeout)
 
                 status_code = getattr(resp, "status_code", 200)
                 text = getattr(resp, "text", "")
@@ -79,6 +104,13 @@ class DataRefreshService:
                     "Fetch attempt %d/%d for %s returned HTTP %d",
                     attempt + 1, max_retries, url, status_code,
                 )
+
+                # Do not repeatedly retry 4xx client errors (bad endpoint / unauthorized)
+                if 400 <= status_code < 500:
+                    clean_msg = text.strip() if text else f"HTTP {status_code}"
+                    last_exc = DataRefreshError(f"HTTP {status_code} client response from {url}: {clean_msg}")
+                    break
+
                 if attempt < max_retries - 1:
                     time.sleep(self.config.backoff_factor * (2**attempt))
             except Exception as exc:
@@ -282,6 +314,7 @@ class DataRefreshService:
         self,
         source_names: list[str] | None = None,
         dry_run: bool | None = None,
+        force: bool = False,
     ) -> RefreshMetadata:
         """Execute refresh across all configured (or selected) data sources.
 
@@ -291,6 +324,8 @@ class DataRefreshService:
             Optional subset of source names to refresh. If None, all enabled sources run.
         dry_run:
             If True, fetches and validates without writing files. Defaults to self.config.dry_run.
+        force:
+            If True, bypasses the 2-hour minimum cooldown check.
         """
         is_dry = self.config.dry_run if dry_run is None else dry_run
         now = datetime.now(timezone.utc)
@@ -298,6 +333,23 @@ class DataRefreshService:
 
         # Load existing metadata or create fresh
         existing = RefreshMetadata.load(meta_path)
+
+        # Enforce CelesTrak 2-hour update policy check unless force or dry-run
+        if not force and not is_dry:
+            can_ref, elapsed = self.can_refresh(meta_path)
+            if not can_ref:
+                logger.info(
+                    "Skipping remote download: CelesTrak GP dataset was refreshed %.1f minutes ago "
+                    "(minimum update cycle is 120 minutes per CelesTrak usage policy).",
+                    elapsed / 60.0,
+                )
+                existing.last_refresh_attempt = now.isoformat()
+                note = f"Cycle skipped: dataset refreshed {elapsed / 60.0:.1f}m ago (cooldown 120m per CelesTrak policy)."
+                if note not in existing.summary_notes:
+                    existing.summary_notes.append(note)
+                existing.save(meta_path)
+                return existing
+
         existing.last_refresh_attempt = now.isoformat()
 
         targets = [

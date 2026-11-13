@@ -201,6 +201,9 @@ export interface CatalogStatusResponse {
   last_refresh_attempt: string | null
   last_successful_refresh: string | null
   refresh_status: 'success' | 'failed' | 'partial' | 'unrefreshed'
+  last_refresh_result?: string | null
+  scheduler_status?: 'active' | 'disabled' | string
+  refresh_interval_hours?: number | null
   total_objects: number
   active_satellites: number
   with_orbital_data: number
@@ -208,6 +211,7 @@ export interface CatalogStatusResponse {
   oldest_epoch: string | null
   newest_epoch: string | null
   max_epoch_age_days: number | null
+  median_epoch_age_days?: number | null
   sources: Record<string, SourceFreshness>
   warnings: string[]
   data_source_notes: string[]
@@ -247,3 +251,141 @@ export interface MultiPropagatedOrbitResponse {
   data_source_notes: string[]
   disclaimer: string
 }
+
+/**
+ * Feature 1 — Collision Avoidance Maneuver (CAM) Simulation interfaces
+ */
+
+export interface ManeuverSimulationRequest {
+  norad1: number
+  norad2: number
+  maneuver_time: string
+  dv_x_km_s: number
+  dv_y_km_s: number
+  dv_z_km_s: number
+  window_hours?: number
+  step_sec?: number
+}
+
+export interface TrajectoryPoint3D {
+  timestamp: string
+  x_km: number
+  y_km: number
+  z_km: number
+}
+
+export interface ManeuverSimulationResponse {
+  original_tca: string
+  original_miss_km: number
+  original_rel_speed_km_s: number
+  modified_tca: string
+  modified_miss_km: number
+  modified_rel_speed_km_s: number
+  dv_magnitude_km_s: number
+  improvement_km: number
+  maneuver_time: string
+  original_trajectory: TrajectoryPoint3D[]
+  modified_trajectory: TrajectoryPoint3D[]
+  disclaimer: string
+}
+
+/**
+ * Feature 2 — Event Intelligence & Timeline interfaces
+ */
+
+export interface EventResponse {
+  id: string
+  norad_id: number
+  object_name?: string | null
+  event_type: string
+  classification?: string | null
+  classification_explanation?: string | null
+  detected_at: string
+  orbital_epoch?: string | null
+  anomaly_score?: number | null
+  threat_score?: number | null
+  tca?: string | null
+  miss_distance_km?: number | null
+  rel_speed_km_s?: number | null
+  data_source?: string | null
+  created_at: string
+}
+
+export interface EventListResponse {
+  events: EventResponse[]
+  total: number
+  disclaimer: string
+}
+
+export interface LogEventRequest {
+  norad_id: number
+  object_name?: string
+  event_type: string
+  detected_at?: string
+  classification?: string
+  classification_explanation?: string
+  anomaly_score?: number
+  threat_score?: number
+  tca?: string
+  miss_distance_km?: number
+  rel_speed_km_s?: number
+  orbital_epoch?: string
+}
+
+/**
+ * Feature 3 — Collision Probability (Pc) & CDM interfaces
+ */
+
+export interface CDMParseRequest {
+  cdm_text: string
+}
+
+export interface CDMParseResponse {
+  tca: string
+  relative_position_r_km: number
+  relative_position_t_km: number
+  relative_position_n_km: number
+  relative_speed_km_s: number
+  object1_name: string
+  object2_name: string
+  covariance_available: boolean
+  covariance_valid: boolean
+  parse_notes: string[]
+}
+
+export interface PcComputeRequest {
+  miss_distance_km: number
+  rel_speed_km_s: number
+  cov1_rtn?: number[][] | null
+  cov2_rtn?: number[][] | null
+  hard_body_radius_km?: number
+  rel_r_km?: number
+  rel_n_km?: number
+}
+
+export interface PcComputeResponse {
+  pc: number | null
+  pc_method: string
+  hard_body_radius_km: number
+  combined_covariance_valid: boolean
+  miss_distance_km: number
+  relative_speed_km_s: number
+  b_plane_sigma1_km?: number | null
+  b_plane_sigma2_km?: number | null
+  computation_notes: string[]
+  disclaimer: string
+}
+
+export interface PcFromCDMRequest {
+  cdm_text: string
+  hard_body_radius_km?: number
+}
+
+export interface PcFromCDMResponse {
+  tca: string
+  miss_distance_km: number
+  relative_speed_km_s: number
+  pc_result: PcComputeResponse
+  cdm_parse_notes: string[]
+}
+

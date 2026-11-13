@@ -585,3 +585,195 @@ class TestEndToEndRefreshedScreening:
         assert data["summary"]["protected_count"] == 2
         assert data["summary"]["candidates_screened"] == 5
         assert isinstance(data["events"], list)
+
+
+# ---------------------------------------------------------------------------
+# Automated Refresh Lifespan, Cooldown & Enhanced Metrics Tests
+# ---------------------------------------------------------------------------
+
+class TestAutomatedRefreshLifespanAndCooldown:
+    """Verify Layer 12 automated refresh lifecycle, cooldown, and status metrics."""
+
+    def test_default_interval_is_6_hours(self):
+        """Verify the automated refresh interval default is strictly 6.0 hours (21600 seconds)."""
+        from backend.refresh.scheduler import DEFAULT_REFRESH_INTERVAL_SECONDS
+        assert DEFAULT_REFRESH_INTERVAL_SECONDS == 21600.0
+
+    def test_cooldown_enforcement_and_force_bypass(self, tmp_path: Path):
+        """Verify 2-hour cooldown rejects early refresh unless force=True."""
+        meta_file = tmp_path / "meta_cooldown.json"
+        dest_csv = tmp_path / "active.csv"
+        dest_csv.write_text(_generate_valid_gp_csv(count=10, epoch_age_days=1.0))
+
+        # Recent successful refresh 30 minutes ago
+        recent_time = (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat()
+        meta = RefreshMetadata(
+            last_successful_refresh=recent_time,
+            status="success",
+        )
+        meta.save(meta_file)
+
+        mock_http = MagicMock()
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.text = _generate_valid_gp_csv(count=25, epoch_age_days=0.5)
+        mock_http.get.return_value = mock_resp
+
+        cfg = RefreshConfig(
+            sources=[
+                RefreshSourceConfig(
+                    source_name="active_satellites_gp",
+                    url="https://celestrak.org/test.csv",
+                    dest_path=dest_csv,
+                )
+            ],
+            metadata_path=meta_file,
+        )
+        service = DataRefreshService(config=cfg, http_client=mock_http)
+
+        # 1. Check can_refresh
+        can_run, elapsed = service.can_refresh(meta_file)
+        assert can_run is False
+        assert elapsed < 7200.0
+
+        # 2. refresh_all(force=False) must skip download
+        result = service.refresh_all(force=False)
+        assert mock_http.get.call_count == 0
+        assert any("cooldown" in n.lower() for n in result.summary_notes)
+
+        # 3. refresh_all(force=True) must bypass cooldown and download
+        result_forced = service.refresh_all(force=True)
+        assert mock_http.get.call_count == 1
+        assert result_forced.status == "success"
+
+    def test_4xx_client_error_short_circuit_no_retry(self, tmp_path: Path):
+        """Verify HTTP 4xx errors short-circuit immediately without retrying."""
+        dest_csv = tmp_path / "test.csv"
+        meta_file = tmp_path / "meta_4xx.json"
+
+        mock_http = MagicMock()
+        mock_resp = MagicMock()
+        mock_resp.status_code = 404
+        mock_resp.text = "Not Found"
+        mock_http.get.return_value = mock_resp
+
+        cfg = RefreshConfig(
+            sources=[
+                RefreshSourceConfig(
+                    source_name="test_src",
+                    url="https://celestrak.org/missing.csv",
+                    dest_path=dest_csv,
+                )
+            ],
+            metadata_path=meta_file,
+            max_retries=3,
+        )
+        service = DataRefreshService(config=cfg, http_client=mock_http)
+
+        # _fetch_with_retries raises DataRefreshError on 4xx
+        with pytest.raises(DataRefreshError) as exc_info:
+            service._fetch_with_retries(cfg.sources[0].url, timeout=10.0)
+
+        assert "non-200 status code" in str(exc_info.value).lower() or "404" in str(exc_info.value).lower()
+        # Ensure only 1 attempt was made despite max_retries=3
+        assert mock_http.get.call_count == 1
+
+        # Also verify refresh_source safely catches and returns failed metadata
+        src_meta = service.refresh_source(cfg.sources[0])
+        assert src_meta.success is False
+        assert "404" in src_meta.error_message or "non-200" in src_meta.error_message.lower()
+
+    def test_user_agent_header_present(self, tmp_path: Path):
+        """Verify User-Agent header is sent with CelesTrak HTTP requests."""
+        dest_csv = tmp_path / "active.csv"
+        meta_file = tmp_path / "meta_ua.json"
+
+        mock_http = MagicMock()
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.text = _generate_valid_gp_csv(count=25, epoch_age_days=1.0)
+        mock_http.get.return_value = mock_resp
+
+        cfg = RefreshConfig(
+            sources=[
+                RefreshSourceConfig(
+                    source_name="active_satellites_gp",
+                    url="https://celestrak.org/test.csv",
+                    dest_path=dest_csv,
+                )
+            ],
+            metadata_path=meta_file,
+        )
+        service = DataRefreshService(config=cfg, http_client=mock_http)
+        service.refresh_all(force=True)
+
+        assert mock_http.get.call_count == 1
+        _, kwargs = mock_http.get.call_args
+        headers = kwargs.get("headers", {})
+        assert "User-Agent" in headers
+        assert "ADITI-SSA" in headers["User-Agent"]
+
+    def test_global_scheduler_singleton_and_duplicate_prevention(self):
+        """Verify global scheduler singleton behavior and duplicate instance prevention."""
+        from backend.refresh.scheduler import (
+            get_global_scheduler,
+            get_scheduler_status,
+            init_global_scheduler,
+            shutdown_global_scheduler,
+        )
+
+        shutdown_global_scheduler()
+        assert get_scheduler_status() == "disabled"
+
+        s1 = init_global_scheduler(interval_seconds=3600.0)
+        assert s1 is not None
+        assert s1.is_running
+        assert get_scheduler_status() == "active"
+
+        # Calling again returns existing active singleton
+        s2 = init_global_scheduler(interval_seconds=7200.0)
+        assert s2 is s1
+
+        # Clean shutdown
+        shutdown_global_scheduler(timeout=2.0)
+        assert get_global_scheduler() is None
+        assert get_scheduler_status() == "disabled"
+
+    def test_lifespan_lifecycle_and_env_toggle(self, monkeypatch):
+        """Verify FastAPI lifespan starts/stops scheduler and honors SSA_REFRESH_ENABLED."""
+        import asyncio
+        from backend.main import lifespan
+        from backend.refresh.scheduler import get_scheduler_status, shutdown_global_scheduler
+
+        shutdown_global_scheduler()
+
+        async def run_lifespan_test(enabled: bool):
+            monkeypatch.setenv("SSA_REFRESH_ENABLED", "true" if enabled else "false")
+            monkeypatch.setenv("SSA_REFRESH_INTERVAL_HOURS", "6.0")
+            monkeypatch.setenv("SSA_REFRESH_RUN_IMMEDIATELY", "false")
+
+            async with lifespan(app):
+                status = get_scheduler_status()
+                if enabled:
+                    assert status == "active"
+                else:
+                    assert status == "disabled"
+
+            assert get_scheduler_status() == "disabled"
+
+        asyncio.run(run_lifespan_test(enabled=True))
+        asyncio.run(run_lifespan_test(enabled=False))
+
+    def test_catalog_status_new_freshness_fields(self):
+        """Verify /catalog/status exposes scheduler_status, median_epoch_age_days, etc."""
+        resp = client.get("/catalog/status")
+        assert resp.status_code == 200
+        data = resp.json()
+
+        assert "scheduler_status" in data
+        assert data["scheduler_status"] in ("active", "disabled")
+        assert "median_epoch_age_days" in data
+        if data["median_epoch_age_days"] is not None:
+            assert data["median_epoch_age_days"] > 0
+        assert "refresh_interval_hours" in data
+        assert data["refresh_interval_hours"] == 6.0

@@ -68,7 +68,11 @@ async function apiFetch<T>(
             : JSON.stringify(body.detail)
       }
     } catch {
-      /* ignore JSON parse failure — use the default status message */
+      if (response.status === 404) {
+        detail = 'Resource or endpoint not found (HTTP 404). Ensure the backend service has the required route registered.'
+      } else if (response.status === 500) {
+        detail = 'Internal server error (HTTP 500). Please check backend logs.'
+      }
     }
     throw new ApiError(response.status, detail)
   }

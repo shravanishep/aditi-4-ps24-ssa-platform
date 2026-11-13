@@ -199,7 +199,7 @@ class TestThreatScreeningDataFreshness:
         payload = {
             "protected_norad_ids": [25544],
             "max_threat_candidates": 5,
-            "max_epoch_age_days": 30.0,
+            "max_epoch_age_days": 365.0,
             "stale_data_policy": "exclude",
         }
         resp = client.post("/threats/screen", json=payload)
