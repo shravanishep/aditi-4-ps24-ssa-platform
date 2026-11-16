@@ -1,0 +1,103 @@
+{
+  "model_name": "ADITI-4-RegimeSpecific-IsolationForest",
+  "model_version": "v3.0.0",
+  "architecture": "RegimeSpecificAnomalyDetector",
+  "training_dataset_version": "v3",
+  "training_dataset_rows": 33950,
+  "training_satellites_total": 350,
+  "training_split_satellites": 280,
+  "training_split_rows": 16240,
+  "supported_regimes": [
+    "LEO",
+    "MEO",
+    "GEO",
+    "HEO"
+  ],
+  "features_used": [
+    "orbital_radius_km",
+    "altitude_km",
+    "speed_km_s",
+    "radial_vel_km_s",
+    "cross_track_vel_km_s",
+    "angular_momentum_km2_s",
+    "specific_energy_km2_s2",
+    "d_altitude_km",
+    "d_orbital_radius_km",
+    "d_speed_km_s",
+    "d_specific_energy_km2_s2",
+    "d_angular_momentum_km2_s"
+  ],
+  "feature_count": 12,
+  "feature_ordering": [
+    "orbital_radius_km",
+    "altitude_km",
+    "speed_km_s",
+    "radial_vel_km_s",
+    "cross_track_vel_km_s",
+    "angular_momentum_km2_s",
+    "specific_energy_km2_s2",
+    "d_altitude_km",
+    "d_orbital_radius_km",
+    "d_speed_km_s",
+    "d_specific_energy_km2_s2",
+    "d_angular_momentum_km2_s"
+  ],
+  "regime_models": {
+    "LEO": "models/production/regime_model_leo.joblib",
+    "MEO": "models/production/regime_model_meo.joblib",
+    "GEO": "models/production/regime_model_geo.joblib",
+    "HEO": "models/production/regime_model_heo.joblib"
+  },
+  "thresholds": {
+    "LEO": {
+      "warning_threshold": 0.65,
+      "critical_threshold": 0.8,
+      "decision_threshold": 0.7,
+      "validation_p90": 0.7925,
+      "validation_p95": 0.8858
+    },
+    "MEO": {
+      "warning_threshold": 0.65,
+      "critical_threshold": 0.8,
+      "decision_threshold": 0.7,
+      "validation_p90": 0.8497,
+      "validation_p95": 0.9459
+    },
+    "GEO": {
+      "warning_threshold": 0.6,
+      "critical_threshold": 0.75,
+      "decision_threshold": 0.65,
+      "validation_p90": 0.8056,
+      "validation_p95": 0.9169
+    },
+    "HEO": {
+      "warning_threshold": 0.72,
+      "critical_threshold": 0.82,
+      "decision_threshold": 0.75,
+      "validation_p90": 0.7461,
+      "validation_p95": 0.7486,
+      "notes": "Higher threshold required due to natural perigee/apogee orbital dynamics in high-eccentricity orbits (e > 0.5)."
+    }
+  },
+  "offline_validation_summary": {
+    "total_test_rows": 5600,
+    "anomalies_evaluated": 96,
+    "test_roc_auc": 0.8,
+    "test_recall": 0.5833,
+    "test_precision": 0.0537,
+    "unseen_satellites_evaluated": 70,
+    "unseen_alert_rate_overall": 0.1873,
+    "unseen_alert_rate_by_regime": {
+      "LEO": 0.1959,
+      "MEO": 0.1667,
+      "GEO": 0.125,
+      "HEO": 0.268
+    }
+  },
+  "provenance": {
+    "git_branch": "ml/dataset-expansion-v2",
+    "dataset_path": "data/processed/orbital_features_v3.parquet",
+    "raw_gp_catalog": "data/raw/satellites_gp_v3.csv",
+    "trained_timestamp": "2026-11-16T23:15:00Z"
+  }
+}

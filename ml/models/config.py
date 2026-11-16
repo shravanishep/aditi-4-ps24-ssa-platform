@@ -39,6 +39,17 @@ BEHAVIOURAL_FEATURES: list[str] = [
     "d_angular_momentum_km2_s",
 ]
 
+# ---------------------------------------------------------------------------
+# Feature selection for temporal-only anomaly detection (Phase 6 Approach B)
+# ---------------------------------------------------------------------------
+TEMPORAL_FEATURES: list[str] = [
+    "d_altitude_km",
+    "d_speed_km_s",
+    "d_specific_energy_km2_s2",
+    "d_angular_momentum_km2_s",
+    "d_orbital_radius_km",
+]
+
 
 @dataclass
 class AnomalyModelConfig:
