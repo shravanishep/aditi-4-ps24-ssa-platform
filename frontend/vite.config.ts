@@ -35,6 +35,11 @@ export default defineConfig({
         changeOrigin: true,
         bypass: (req) => (req.headers.accept?.includes('text/html') ? '/index.html' : undefined),
       },
+      '/ml': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+        bypass: (req) => (req.headers.accept?.includes('text/html') ? '/index.html' : undefined),
+      },
       '/cdm': {
         target: 'http://localhost:8000',
         changeOrigin: true,
