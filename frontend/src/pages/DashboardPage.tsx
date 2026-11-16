@@ -7,6 +7,7 @@ import StatusBadge from '../components/common/StatusBadge'
 import LoadingSpinner from '../components/common/LoadingSpinner'
 import ThreatPrioritizationPanel from '../components/threats/ThreatPrioritizationPanel'
 import CatalogFreshnessCard from '../components/catalog/CatalogFreshnessCard'
+import MLAnomalyPanel from '../components/ml/MLAnomalyPanel'
 
 type HealthStatus = 'loading' | 'ok' | 'error'
 
@@ -66,6 +67,9 @@ export default function DashboardPage() {
 
       {/* Threat Prioritization & Screening */}
       <ThreatPrioritizationPanel />
+
+      {/* Layer 8 ML Anomaly Detection & Regime Telemetry */}
+      <MLAnomalyPanel />
 
       {/* Sample Objects from Ingested Dataset */}
       <section>

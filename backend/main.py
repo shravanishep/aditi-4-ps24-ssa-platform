@@ -14,6 +14,7 @@ from fastapi import FastAPI
 
 from backend.api.routes import router, invalidate_catalog_cache
 from backend.events.routes import router as events_router
+from backend.ml.routes import router as ml_router
 from backend.refresh.scheduler import (
     DEFAULT_REFRESH_INTERVAL_SECONDS,
     init_global_scheduler,
@@ -70,3 +71,4 @@ app = FastAPI(
 # Mount API routers
 app.include_router(router)
 app.include_router(events_router, prefix="/events", tags=["events"])
+app.include_router(ml_router, prefix="/ml", tags=["ml"])
