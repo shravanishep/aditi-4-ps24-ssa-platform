@@ -2,11 +2,15 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import cesium from 'vite-plugin-cesium'
 
-// The Vite dev server proxies all API routes to the FastAPI backend.
-// This avoids CORS issues during development without modifying the backend.
-// For production, set VITE_API_BASE_URL to the actual backend URL.
+// In production (Vercel), VITE_API_BASE_URL is set to the Render backend URL.
+// In development, the dev-server proxy below handles all /api/* requests.
+const API_BASE = process.env.VITE_API_BASE_URL || 'http://localhost:8000'
+
 export default defineConfig({
   plugins: [react(), cesium()],
+  define: {
+    __API_BASE__: JSON.stringify(API_BASE),
+  },
   server: {
     proxy: {
       '/health': { target: 'http://localhost:8000', changeOrigin: true },

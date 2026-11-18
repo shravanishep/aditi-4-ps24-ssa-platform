@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: aditi-ssa-backend
+    runtime: python
+    rootDir: .
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12"
+      - key: SSA_REFRESH_ENABLED
+        value: "false"
+      - key: SSA_REFRESH_RUN_IMMEDIATELY
+        value: "false"
+      - key: SPACE_TRACK_USERNAME
+        sync: false
+      - key: SPACE_TRACK_PASSWORD
+        sync: false
+    healthCheckPath: /health

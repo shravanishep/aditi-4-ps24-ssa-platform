@@ -11,6 +11,7 @@ import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from backend.api.routes import router, invalidate_catalog_cache
 from backend.events.routes import router as events_router
@@ -66,6 +67,26 @@ app = FastAPI(
     ),
     version="0.5.0",
     lifespan=lifespan,
+)
+
+# ---------------------------------------------------------------------------
+# CORS — allow the Vercel frontend (and local dev) to call the backend
+# ---------------------------------------------------------------------------
+_allowed_origins_env = os.environ.get("CORS_ALLOWED_ORIGINS", "")
+_origins = [o.strip() for o in _allowed_origins_env.split(",") if o.strip()]
+# Always allow localhost dev origins
+_origins += [
+    "http://localhost:5173",
+    "http://localhost:3000",
+    "http://localhost:80",
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_origins if _origins else ["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Mount API routers
