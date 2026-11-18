@@ -16,8 +16,11 @@ if str(_REPO_ROOT) not in sys.path:
 import numpy as np
 import pandas as pd
 
-from ml.models.regime_detector import RegimeSpecificAnomalyDetector, RegimeModelNotFoundError
-from ml.models.config import BEHAVIOURAL_FEATURES
+from ml.models.regime_detector import (  # type: ignore[import-untyped, import-not-found]
+    RegimeSpecificAnomalyDetector,
+    RegimeModelNotFoundError,
+)
+from ml.models.config import BEHAVIOURAL_FEATURES  # type: ignore[import-untyped, import-not-found]
 
 logger = logging.getLogger("backend.ml.service")
 
