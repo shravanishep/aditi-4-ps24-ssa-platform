@@ -12,7 +12,10 @@
  * In production set VITE_API_BASE_URL to the deployed backend origin.
  */
 
-const BASE: string = import.meta.env.VITE_API_BASE_URL ?? ''
+const DEFAULT_PROD_URL = 'https://aditi-ssa-backend.onrender.com'
+const BASE: string =
+  import.meta.env.VITE_API_BASE_URL ||
+  (import.meta.env.PROD ? DEFAULT_PROD_URL : '')
 
 /** Typed API error that carries the HTTP status code. */
 export class ApiError extends Error {
