@@ -70,22 +70,14 @@ app = FastAPI(
 )
 
 # ---------------------------------------------------------------------------
-# CORS — allow the Vercel frontend (and local dev) to call the backend
+# CORS — allow ALL origins so Vercel frontend can call the Render backend.
+# This is safe for a public read-only research platform.
 # ---------------------------------------------------------------------------
-_allowed_origins_env = os.environ.get("CORS_ALLOWED_ORIGINS", "")
-_origins = [o.strip() for o in _allowed_origins_env.split(",") if o.strip()]
-# Always allow localhost dev origins
-_origins += [
-    "http://localhost:5173",
-    "http://localhost:3000",
-    "http://localhost:80",
-]
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_origins if _origins else ["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
 )
 

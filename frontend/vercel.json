@@ -3,27 +3,6 @@
   "outputDirectory": "dist",
   "installCommand": "npm ci",
   "rewrites": [
-    { "source": "/health", "destination": "https://aditi-ssa-backend.onrender.com/health" },
-    { "source": "/satellites/:path*", "destination": "https://aditi-ssa-backend.onrender.com/satellites/:path*" },
-    { "source": "/conjunction/:path*", "destination": "https://aditi-ssa-backend.onrender.com/conjunction/:path*" },
-    { "source": "/threats/:path*", "destination": "https://aditi-ssa-backend.onrender.com/threats/:path*" },
-    { "source": "/catalog/:path*", "destination": "https://aditi-ssa-backend.onrender.com/catalog/:path*" },
-    { "source": "/events/:path*", "destination": "https://aditi-ssa-backend.onrender.com/events/:path*" },
-    { "source": "/ml/:path*", "destination": "https://aditi-ssa-backend.onrender.com/ml/:path*" },
-    { "source": "/cdm/:path*", "destination": "https://aditi-ssa-backend.onrender.com/cdm/:path*" },
-    { "source": "/pc/:path*", "destination": "https://aditi-ssa-backend.onrender.com/pc/:path*" },
-    { "source": "/maneuver/:path*", "destination": "https://aditi-ssa-backend.onrender.com/maneuver/:path*" },
-    { "source": "/docs", "destination": "https://aditi-ssa-backend.onrender.com/docs" },
-    { "source": "/openapi.json", "destination": "https://aditi-ssa-backend.onrender.com/openapi.json" },
     { "source": "/(.*)", "destination": "/index.html" }
-  ],
-  "headers": [
-    {
-      "source": "/(.*)",
-      "headers": [
-        { "key": "Cross-Origin-Embedder-Policy", "value": "unsafe-none" },
-        { "key": "Cross-Origin-Opener-Policy", "value": "same-origin-allow-popups" }
-      ]
-    }
   ]
 }
