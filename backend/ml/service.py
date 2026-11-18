@@ -13,13 +13,9 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-import numpy as np
 import pandas as pd
 
-from ml.models.regime_detector import (  # type: ignore[import-untyped, import-not-found]
-    RegimeSpecificAnomalyDetector,
-    RegimeModelNotFoundError,
-)
+from ml.models.regime_detector import RegimeSpecificAnomalyDetector  # type: ignore[import-untyped, import-not-found]
 from ml.models.config import BEHAVIOURAL_FEATURES  # type: ignore[import-untyped, import-not-found]
 
 logger = logging.getLogger("backend.ml.service")
@@ -215,7 +211,6 @@ class MLAnomalyService:
             }
 
         df = self._cached_eval_df
-        scores = df["normalized_anomaly_score"].values
         thresholds = self.manifest.get("thresholds", {}) if self.manifest else {}
 
         # Classify with calibrated regime-specific thresholds
@@ -248,24 +243,38 @@ class MLAnomalyService:
         df["calibrated_is_anomaly"] = is_anoms
         df["calibrated_threshold"] = thresh_crossed
 
-        # Score distribution
-        score_dist = {
-            "mean": round(float(np.mean(scores)), 4),
-            "median": round(float(np.median(scores)), 4),
-            "p75": round(float(np.percentile(scores, 75)), 4),
-            "p95": round(float(np.percentile(scores, 95)), 4),
-            "min": round(float(np.min(scores)), 4),
-            "max": round(float(np.max(scores)), 4),
-        }
+        # Score distribution (pure Python to eliminate NumPy array type stub warnings)
+        raw_scores: List[float] = [float(x) for x in df["normalized_anomaly_score"].dropna().tolist()]
+        if raw_scores:
+            raw_scores.sort()
+            n_obs = len(raw_scores)
+            score_dist = {
+                "mean": round(float(sum(raw_scores) / n_obs), 4),
+                "median": round(float(raw_scores[n_obs // 2]), 4),
+                "p75": round(float(raw_scores[int(n_obs * 0.75)]), 4),
+                "p95": round(float(raw_scores[min(int(n_obs * 0.95), n_obs - 1)]), 4),
+                "min": round(float(raw_scores[0]), 4),
+                "max": round(float(raw_scores[-1]), 4),
+            }
+        else:
+            score_dist = {
+                "mean": 0.0,
+                "median": 0.0,
+                "p75": 0.0,
+                "p95": 0.0,
+                "min": 0.0,
+                "max": 0.0,
+            }
 
-        # Alerts by regime
-        alerts_by_regime = {}
+        # Alerts by regime (using dictionary counts to eliminate Series boolean indexing warnings)
+        alerts_by_regime: Dict[str, Dict[str, int]] = {}
         for reg in ["LEO", "MEO", "GEO", "HEO"]:
-            sub = df[df["regime"] == reg]
+            reg_df = df[df["regime"] == reg]
+            reg_counts = reg_df["calibrated_severity"].value_counts().to_dict()
             alerts_by_regime[reg] = {
-                "normal": int((sub["calibrated_severity"] == "NORMAL").sum()),
-                "warning": int((sub["calibrated_severity"] == "WARNING").sum()),
-                "critical": int((sub["calibrated_severity"] == "CRITICAL").sum()),
+                "normal": int(reg_counts.get("NORMAL", 0)),
+                "warning": int(reg_counts.get("WARNING", 0)),
+                "critical": int(reg_counts.get("CRITICAL", 0)),
             }
 
         # Select recent representative observations (top anomalous + diverse normal)
@@ -303,13 +312,14 @@ class MLAnomalyService:
                 "notes": note
             })
 
+        overall_counts = df["calibrated_severity"].value_counts().to_dict()
         return {
             "model_version": self.manifest.get("model_version", "v3.0.0") if self.manifest else "v3.0.0",
             "total_evaluated_objects": int(df["norad_cat_id"].nunique()),
             "total_observations_evaluated": len(df),
-            "normal_count": int((df["calibrated_severity"] == "NORMAL").sum()),
-            "warning_count": int((df["calibrated_severity"] == "WARNING").sum()),
-            "critical_count": int((df["calibrated_severity"] == "CRITICAL").sum()),
+            "normal_count": int(overall_counts.get("NORMAL", 0)),
+            "warning_count": int(overall_counts.get("WARNING", 0)),
+            "critical_count": int(overall_counts.get("CRITICAL", 0)),
             "score_distribution": score_dist,
             "alerts_by_regime": alerts_by_regime,
             "recent_anomalies": recent_obs
