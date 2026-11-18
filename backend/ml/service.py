@@ -5,7 +5,14 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
+import sys
 from typing import Any, Dict, List, Optional
+
+# Ensure repository root is in sys.path so that 'ml' and 'backend' are always resolvable
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
 import numpy as np
 import pandas as pd
 
@@ -304,3 +311,16 @@ class MLAnomalyService:
             "alerts_by_regime": alerts_by_regime,
             "recent_anomalies": recent_obs
         }
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+    service = MLAnomalyService.get_instance()
+    print("--- Model Status ---")
+    print(json.dumps(service.get_model_status(), indent=2))
+    print("--- Anomalies Overview (Top 3) ---")
+    overview = service.get_anomalies_overview(limit=3)
+    print(f"Total Objects Evaluated: {overview['total_evaluated_objects']}")
+    print(f"Total Observations: {overview['total_observations_evaluated']}")
+    print(f"Alerts by Regime: {overview['alerts_by_regime']}")
+
